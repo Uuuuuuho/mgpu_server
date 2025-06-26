@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# VSCode
+.vscode/
+
+# OS/Editor
+.DS_Store
+Thumbs.db
+
+# 기타
+*.log
+
+# 소켓 파일
+/tmp/mgpu_scheduler.sock
