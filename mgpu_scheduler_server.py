@@ -112,13 +112,18 @@ def handle_client(conn, scheduler):
         req = json.loads(data.decode())
         cmd = req.get('cmd')
         if cmd == 'submit':
+            # 제출 시점에 GPU 상태 확인 및 메모리 제약 체크
+            available = get_available_gpus()
+            max_mem = max(available) if available else 0
+            min_mem = min(available) if available else 0
+            if req['mem'] > max_mem or req['mem'] < 1:
+                job_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+                msg = f"요청 메모리({req['mem']}MB)가 허용 범위({min_mem}~{max_mem}MB)를 벗어났습니다."
+                conn.send(json.dumps({'status':'fail','job_id':job_id,'msg':msg}).encode())
+                return
             job = Job(req['user'], req['gpus'], req['mem'], req['cmdline'])
             job_id = scheduler.submit_job(job)
-            # 바로 에러 상태가 된 경우 응답
-            if getattr(job, 'status', '') == 'error':
-                conn.send(json.dumps({'status':'fail','job_id':job_id,'msg':getattr(job, 'error_msg', '')}).encode())
-            else:
-                conn.send(json.dumps({'status':'ok','job_id':job_id}).encode())
+            conn.send(json.dumps({'status':'ok','job_id':job_id}).encode())
         elif cmd == 'queue':
             queue = scheduler.get_queue()
             running = scheduler.get_running()
