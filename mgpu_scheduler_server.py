@@ -8,12 +8,14 @@ import json
 import time
 import random
 import string
+import argparse
 from collections import deque
 
 SOCKET_PATH = '/tmp/mgpu_scheduler.sock'
+MAX_JOB_TIME = 600  # 최대 점유시간(초), 필요시 main에서 인자로 받을 수 있음
 
 class Job:
-    def __init__(self, user, gpus, mem, cmd):
+    def __init__(self, user, gpus, mem, cmd, time_limit=None):
         self.id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         self.user = user
         self.gpus = gpus
@@ -21,6 +23,8 @@ class Job:
         self.cmd = cmd
         self.status = 'queued'
         self.proc = None
+        self.start_time = None  # 실행 시작 시간
+        self.time_limit = time_limit  # 유저별 시간 제한(초)
 
     def to_dict(self):
         return {
@@ -73,7 +77,7 @@ class Scheduler:
         with self.lock:
             return [job.to_dict() for job in self.running_jobs.values()]
 
-    def try_run_jobs(self):
+    def try_run_jobs(self, max_job_time=None):
         with self.lock:
             available = get_available_gpus()
             if not available:
@@ -81,9 +85,18 @@ class Scheduler:
             max_mem = max(available) if available else 0
             min_mem = min(available) if available else 0
             used = [0]*len(available)
-            for job in self.running_jobs.values():
-                for i in range(job.gpus):
-                    used[i] += 1
+            now = time.time()
+            # 실행 중인 작업의 점유시간 체크 및 선점
+            for job in list(self.running_jobs.values()):
+                limit = job.time_limit if job.time_limit is not None else max_job_time
+                if limit is not None and job.start_time and now - job.start_time > limit:
+                    print(f"[INFO] Job {job.id}({job.user}) 점유시간({limit}s) 초과로 큐 뒤로 이동(context switch)")
+                    if job.proc:
+                        job.proc.terminate()
+                    job.status = 'timeout'
+                    job.start_time = None
+                    self.job_queue.append(self.job_queue.pop() if len(self.job_queue) else job)  # 맨 뒤로
+                    del self.running_jobs[job.id]
             for job in list(self.job_queue):
                 # 메모리 제약 체크
                 if job.mem > max_mem or job.mem < 1:
@@ -97,6 +110,7 @@ class Scheduler:
                     proc = subprocess.Popen(job.cmd, shell=True, env=env)
                     job.proc = proc
                     job.status = 'running'
+                    job.start_time = time.time()
                     self.running_jobs[job.id] = job
                     self.job_queue.remove(job)
 
@@ -106,7 +120,7 @@ class Scheduler:
             for jid in finished:
                 del self.running_jobs[jid]
 
-def handle_client(conn, scheduler):
+def handle_client(conn, scheduler, max_job_time):
     try:
         data = conn.recv(4096)
         req = json.loads(data.decode())
@@ -121,7 +135,8 @@ def handle_client(conn, scheduler):
                 msg = f"요청 메모리({req['mem']}MB)가 허용 범위({min_mem}~{max_mem}MB)를 벗어났습니다."
                 conn.send(json.dumps({'status':'fail','job_id':job_id,'msg':msg}).encode())
                 return
-            job = Job(req['user'], req['gpus'], req['mem'], req['cmdline'])
+            time_limit = req.get('time_limit')
+            job = Job(req['user'], req['gpus'], req['mem'], req['cmdline'], time_limit)
             job_id = scheduler.submit_job(job)
             conn.send(json.dumps({'status':'ok','job_id':job_id}).encode())
         elif cmd == 'queue':
@@ -139,6 +154,9 @@ def handle_client(conn, scheduler):
         conn.close()
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--max-job-time', type=int, default=None, help='모든 작업의 최대 점유시간(초). 미설정시 무제한')
+    args = parser.parse_args()
     if os.path.exists(SOCKET_PATH):
         os.remove(SOCKET_PATH)
     scheduler = Scheduler()
@@ -148,13 +166,13 @@ def main():
     print('mgpu_scheduler_server started')
     def bg():
         while True:
-            scheduler.try_run_jobs()
+            scheduler.try_run_jobs(args.max_job_time)
             scheduler.reap_jobs()
             time.sleep(2)
     threading.Thread(target=bg, daemon=True).start()
     while True:
         conn, _ = s.accept()
-        threading.Thread(target=handle_client, args=(conn, scheduler), daemon=True).start()
+        threading.Thread(target=handle_client, args=(conn, scheduler, args.max_job_time), daemon=True).start()
 
 if __name__ == "__main__":
     main()
