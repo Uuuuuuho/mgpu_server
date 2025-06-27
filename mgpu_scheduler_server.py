@@ -85,29 +85,27 @@ class Scheduler:
             max_mem = max(available) if available else 0
             min_mem = min(available) if available else 0
             used = [0]*len(available)
-            now = time.time()
-            # 실행 중인 작업의 점유시간 체크 및 선점
-            for job in list(self.running_jobs.values()):
-                limit = job.time_limit if job.time_limit is not None else max_job_time
-                if limit is not None and job.start_time and now - job.start_time > limit:
-                    print(f"[INFO] Job {job.id}({job.user}) 점유시간({limit}s) 초과로 큐 뒤로 이동(context switch)")
-                    if job.proc:
-                        job.proc.terminate()
-                    job.status = 'timeout'
-                    job.start_time = None
-                    self.job_queue.append(self.job_queue.pop() if len(self.job_queue) else job)  # 맨 뒤로
-                    del self.running_jobs[job.id]
+            # 현재 실행 중인 작업의 GPU 메모리 점유량 반영
+            for running_job in self.running_jobs.values():
+                if running_job.mem is not None and running_job.gpus > 0:
+                    # 이미 할당된 GPU 인덱스 추정 (가장 단순하게 앞에서부터 할당)
+                    for i in range(running_job.gpus):
+                        if i < len(used):
+                            used[i] += running_job.mem
             for job in list(self.job_queue):
-                # mem이 None이면 최소 메모리로 자동 할당
                 job_mem = job.mem if job.mem is not None else min_mem
                 if job_mem > max_mem or job_mem < 1:
                     job.status = 'error'
                     job.error_msg = f"요청 메모리({job_mem}MB)가 허용 범위({min_mem}~{max_mem}MB)를 벗어났습니다."
                     continue
-                idxs = [i for i, m in enumerate(available) if m >= job_mem]
-                if len(idxs) >= job.gpus:
+                # 실제 사용 가능한 GPU만 고려
+                candidate_idxs = [i for i, (avail, u) in enumerate(zip(available, used)) if (avail - u) >= job_mem]
+                if len(candidate_idxs) >= job.gpus:
+                    selected_idxs = candidate_idxs[:job.gpus]
+                    for idx in selected_idxs:
+                        used[idx] += job_mem
                     env = os.environ.copy()
-                    env['CUDA_VISIBLE_DEVICES'] = ','.join(str(i) for i in idxs[:job.gpus])
+                    env['CUDA_VISIBLE_DEVICES'] = ','.join(str(i) for i in selected_idxs)
                     home_dir = os.path.expanduser(f'~{job.user}')
                     venv_activate = os.path.join(home_dir, 'venv', 'bin', 'activate')
                     if os.path.exists(venv_activate):
