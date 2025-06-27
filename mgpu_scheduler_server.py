@@ -19,7 +19,7 @@ class Job:
         self.id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         self.user = user
         self.gpus = gpus
-        self.mem = mem
+        self.mem = mem  # None이면 서버에서 자동 할당
         self.cmd = cmd
         self.status = 'queued'
         self.proc = None
@@ -98,16 +98,20 @@ class Scheduler:
                     self.job_queue.append(self.job_queue.pop() if len(self.job_queue) else job)  # 맨 뒤로
                     del self.running_jobs[job.id]
             for job in list(self.job_queue):
-                # 메모리 제약 체크
-                if job.mem > max_mem or job.mem < 1:
+                # mem이 None이면 최소 메모리로 자동 할당
+                job_mem = job.mem if job.mem is not None else min_mem
+                if job_mem > max_mem or job_mem < 1:
                     job.status = 'error'
-                    job.error_msg = f"요청 메모리({job.mem}MB)가 허용 범위({min_mem}~{max_mem}MB)를 벗어났습니다."
+                    job.error_msg = f"요청 메모리({job_mem}MB)가 허용 범위({min_mem}~{max_mem}MB)를 벗어났습니다."
                     continue
-                idxs = [i for i, m in enumerate(available) if m >= job.mem]
+                idxs = [i for i, m in enumerate(available) if m >= job_mem]
                 if len(idxs) >= job.gpus:
                     env = os.environ.copy()
                     env['CUDA_VISIBLE_DEVICES'] = ','.join(str(i) for i in idxs[:job.gpus])
-                    proc = subprocess.Popen(job.cmd, shell=True, env=env)
+                    # 유저 환경에서 명령 실행 (sudo 필요)
+                    proc = subprocess.Popen([
+                        'sudo', '-u', job.user, 'bash', '-lc', job.cmd
+                    ], env=env)
                     job.proc = proc
                     job.status = 'running'
                     job.start_time = time.time()
@@ -126,17 +130,18 @@ def handle_client(conn, scheduler, max_job_time):
         req = json.loads(data.decode())
         cmd = req.get('cmd')
         if cmd == 'submit':
-            # 제출 시점에 GPU 상태 확인 및 메모리 제약 체크
             available = get_available_gpus()
             max_mem = max(available) if available else 0
             min_mem = min(available) if available else 0
-            if req['mem'] > max_mem or req['mem'] < 1:
-                job_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-                msg = f"요청 메모리({req['mem']}MB)가 허용 범위({min_mem}~{max_mem}MB)를 벗어났습니다."
-                conn.send(json.dumps({'status':'fail','job_id':job_id,'msg':msg}).encode())
-                return
+            mem = req.get('mem')
+            if mem is not None:
+                if mem > max_mem or mem < 1:
+                    job_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+                    msg = f"요청 메모리({mem}MB)가 허용 범위({min_mem}~{max_mem}MB)를 벗어났습니다."
+                    conn.send(json.dumps({'status':'fail','job_id':job_id,'msg':msg}).encode())
+                    return
             time_limit = req.get('time_limit')
-            job = Job(req['user'], req['gpus'], req['mem'], req['cmdline'], time_limit)
+            job = Job(req['user'], req['gpus'], mem, req['cmdline'], time_limit)
             job_id = scheduler.submit_job(job)
             conn.send(json.dumps({'status':'ok','job_id':job_id}).encode())
         elif cmd == 'queue':
