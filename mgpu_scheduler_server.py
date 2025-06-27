@@ -108,9 +108,12 @@ class Scheduler:
                 if len(idxs) >= job.gpus:
                     env = os.environ.copy()
                     env['CUDA_VISIBLE_DEVICES'] = ','.join(str(i) for i in idxs[:job.gpus])
-                    # 유저 홈 디렉토리에서 명령 실행
                     home_dir = os.path.expanduser(f'~{job.user}')
-                    cmd = f'cd {home_dir} && {job.cmd}'
+                    venv_activate = os.path.join(home_dir, 'venv', 'bin', 'activate')
+                    if os.path.exists(venv_activate):
+                        cmd = f'cd {home_dir} && source venv/bin/activate && {job.cmd}'
+                    else:
+                        cmd = f'cd {home_dir} && {job.cmd}'
                     proc = subprocess.Popen([
                         'sudo', '-u', job.user, 'bash', '-lc', cmd
                     ], env=env)
