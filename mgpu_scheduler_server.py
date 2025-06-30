@@ -98,8 +98,11 @@ class Scheduler:
                     job.status = 'error'
                     job.error_msg = f"요청 메모리({job_mem}MB)가 허용 범위({min_mem}~{max_mem}MB)를 벗어났습니다."
                     continue
-                # 실제 사용 가능한 GPU만 고려
-                candidate_idxs = [i for i, (avail, u) in enumerate(zip(available, used)) if (avail - u) >= job_mem]
+                # GPU allocation: prefer idle GPUs, then those with most free memory
+                gpu_status = [(i, available[i] - used[i], used[i]) for i in range(len(available))]
+                # idle GPUs first (used==0), then by most free memory
+                gpu_status.sort(key=lambda x: (x[2] > 0, -x[1]))
+                candidate_idxs = [i for i, free, u in gpu_status if free >= job_mem]
                 if len(candidate_idxs) >= job.gpus:
                     selected_idxs = candidate_idxs[:job.gpus]
                     for idx in selected_idxs:
@@ -112,9 +115,23 @@ class Scheduler:
                         cmd = f'cd {home_dir} && source venv/bin/activate && {job.cmd}'
                     else:
                         cmd = f'cd {home_dir} && {job.cmd}'
-                    proc = subprocess.Popen([
-                        'sudo', '-u', job.user, 'bash', '-lc', cmd
-                    ], env=env)
+                    # Log file for user
+                    log_file = os.path.join(home_dir, f'.mgpu_job_{job.id}.log')
+                    # Debug log if enabled
+                    debug_file = os.path.join(home_dir, '.mgpu_debug')
+                    debug = os.path.exists(debug_file)
+                    if debug:
+                        with open(debug_file, 'a') as dbg:
+                            dbg.write(f"[DEBUG] Launching job {job.id} for user {job.user} on GPUs {selected_idxs} with mem {job_mem}\n")
+                            dbg.flush()
+                    with open(log_file, 'a') as lf:
+                        lf.write(f"[INFO] Launching job {job.id} on GPUs {selected_idxs} with mem {job_mem}\n")
+                        lf.flush()
+                    # Start process, redirect output to log file
+                    with open(log_file, 'a') as lf:
+                        proc = subprocess.Popen([
+                            'sudo', '-u', job.user, 'bash', '-lc', cmd
+                        ], env=env, stdout=lf, stderr=lf)
                     job.proc = proc
                     job.status = 'running'
                     job.start_time = time.time()
