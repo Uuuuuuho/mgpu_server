@@ -1,3 +1,3 @@
 # !/bin/bash
 
-source PATH=${PWD}/dist:${PATH}
+export PATH=${PWD}/dist:${PATH}
