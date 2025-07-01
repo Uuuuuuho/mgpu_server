@@ -10,6 +10,7 @@ import random
 import string
 import argparse
 from collections import deque
+import psutil
 
 SOCKET_PATH = '/tmp/mgpu_scheduler.sock'
 MAX_JOB_TIME = 600  # 최대 점유시간(초), 필요시 main에서 인자로 받을 수 있음
@@ -56,27 +57,33 @@ class Scheduler:
             self.job_queue.append(job)
             return job.id
 
+    def _kill_proc_tree(self, pid):
+        try:
+            parent = psutil.Process(pid)
+            children = parent.children(recursive=True)
+            for child in children:
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            parent.kill()
+        except Exception:
+            pass
+
     def cancel_job(self, job_id):
         with self.lock:
             # 큐에서 먼저 제거
             for job in list(self.job_queue):
                 if job.id == job_id:
                     self.job_queue.remove(job)
-                    # 혹시 실행 중인 job이 있으면 프로세스 그룹도 kill
+                    # 혹시 실행 중인 job이 있으면 프로세스 트리 전체 kill
                     if job_id in self.running_jobs:
                         proc = self.running_jobs[job_id].proc
                         if proc:
                             try:
-                                pgid = os.getpgid(proc.pid)
-                                os.killpg(pgid, 9)
+                                self._kill_proc_tree(proc.pid)
                             except Exception as e:
-                                print(f"[DEBUG] Failed to kill process group: {e}")
-                            # 시스템 전체에서 남은 프로세스도 추가로 종료 시도
-                            try:
-                                subprocess.run(['pkill', '-TERM', '-P', str(proc.pid)], check=False)
-                                subprocess.run(['pkill', '-TERM', '-g', str(pgid)], check=False)
-                            except Exception as e:
-                                print(f"[DEBUG] pkill failed: {e}")
+                                print(f"[DEBUG] Failed to kill proc tree: {e}")
                         del self.running_jobs[job_id]
                     return True
             # 큐에 없고 실행 중인 경우
@@ -84,16 +91,9 @@ class Scheduler:
                 proc = self.running_jobs[job_id].proc
                 if proc:
                     try:
-                        pgid = os.getpgid(proc.pid)
-                        os.killpg(pgid, 9)
+                        self._kill_proc_tree(proc.pid)
                     except Exception as e:
-                        print(f"[DEBUG] Failed to kill process group: {e}")
-                    # 시스템 전체에서 남은 프로세스도 추가로 종료 시도
-                    try:
-                        subprocess.run(['pkill', '-TERM', '-P', str(proc.pid)], check=False)
-                        subprocess.run(['pkill', '-TERM', '-g', str(pgid)], check=False)
-                    except Exception as e:
-                        print(f"[DEBUG] pkill failed: {e}")
+                        print(f"[DEBUG] Failed to kill proc tree: {e}")
                 del self.running_jobs[job_id]
                 return True
         return False
