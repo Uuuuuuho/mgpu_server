@@ -58,18 +58,42 @@ class Scheduler:
 
     def cancel_job(self, job_id):
         with self.lock:
+            # 큐에서 먼저 제거
             for job in list(self.job_queue):
                 if job.id == job_id:
                     self.job_queue.remove(job)
+                    # 혹시 실행 중인 job이 있으면 프로세스 그룹도 kill
+                    if job_id in self.running_jobs:
+                        proc = self.running_jobs[job_id].proc
+                        if proc:
+                            try:
+                                pgid = os.getpgid(proc.pid)
+                                os.killpg(pgid, 9)
+                            except Exception as e:
+                                print(f"[DEBUG] Failed to kill process group: {e}")
+                            # 시스템 전체에서 남은 프로세스도 추가로 종료 시도
+                            try:
+                                subprocess.run(['pkill', '-TERM', '-P', str(proc.pid)], check=False)
+                                subprocess.run(['pkill', '-TERM', '-g', str(pgid)], check=False)
+                            except Exception as e:
+                                print(f"[DEBUG] pkill failed: {e}")
+                        del self.running_jobs[job_id]
                     return True
+            # 큐에 없고 실행 중인 경우
             if job_id in self.running_jobs:
                 proc = self.running_jobs[job_id].proc
                 if proc:
                     try:
-                        # Kill the whole process group
-                        os.killpg(os.getpgid(proc.pid), 9)
+                        pgid = os.getpgid(proc.pid)
+                        os.killpg(pgid, 9)
                     except Exception as e:
                         print(f"[DEBUG] Failed to kill process group: {e}")
+                    # 시스템 전체에서 남은 프로세스도 추가로 종료 시도
+                    try:
+                        subprocess.run(['pkill', '-TERM', '-P', str(proc.pid)], check=False)
+                        subprocess.run(['pkill', '-TERM', '-g', str(pgid)], check=False)
+                    except Exception as e:
+                        print(f"[DEBUG] pkill failed: {e}")
                 del self.running_jobs[job_id]
                 return True
         return False
