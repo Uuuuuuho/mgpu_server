@@ -132,11 +132,11 @@ class Scheduler:
                     server_home = os.path.expanduser('~')
                     log_file = os.path.join(server_home, f'.mgpu_job_{job.id}.log')
                     # Print log message to wall for user notification
-                    log_msg = f"[MGPU] Job {job.id} started on GPUs {selected_idxs} with mem {job_mem}MB (priority={getattr(job, 'priority', 0)})\n"
-                    try:
-                        subprocess.run(['wall', log_msg], check=False)
-                    except Exception as e:
-                        print(f"[DEBUG] wall failed: {e}")
+                    # log_msg = f"[MGPU] Job {job.id} started on GPUs {selected_idxs} with mem {job_mem}MB (priority={getattr(job, 'priority', 0)})\n"
+                    # try:
+                    #     subprocess.run(['wall', log_msg], check=False)
+                    # except Exception as e:
+                    #     print(f"[DEBUG] wall failed: {e}")
                     # Start process, redirect output to server user's log file
                     with open(log_file, 'a') as lf:
                         proc = subprocess.Popen([
