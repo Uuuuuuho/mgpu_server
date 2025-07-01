@@ -15,7 +15,7 @@ SOCKET_PATH = '/tmp/mgpu_scheduler.sock'
 MAX_JOB_TIME = 600  # 최대 점유시간(초), 필요시 main에서 인자로 받을 수 있음
 
 class Job:
-    def __init__(self, user, gpus, mem, cmd, time_limit=None):
+    def __init__(self, user, gpus, mem, cmd, time_limit=None, priority=0):
         self.id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         self.user = user
         self.gpus = gpus
@@ -25,6 +25,7 @@ class Job:
         self.proc = None
         self.start_time = None  # 실행 시작 시간
         self.time_limit = time_limit  # 유저별 시간 제한(초)
+        self.priority = priority
 
     def to_dict(self):
         return {
@@ -99,8 +100,8 @@ class Scheduler:
                 # 'alice': 10,
                 # 'bob': 5,
             }
-            # Sort queue by user priority (descending), then FIFO
-            self.job_queue = deque(sorted(self.job_queue, key=lambda job: (-user_priority.get(job.user, 0), job.id)))
+            # Sort queue by user-supplied priority (descending), then FIFO
+            self.job_queue = deque(sorted(self.job_queue, key=lambda job: (-getattr(job, 'priority', 0), job.id)))
             for job in list(self.job_queue):
                 job_mem = job.mem if job.mem is not None else min_mem
                 if job_mem > max_mem or job_mem < 1:
@@ -109,7 +110,6 @@ class Scheduler:
                     continue
                 # GPU allocation: prefer idle GPUs, then those with most free memory
                 gpu_status = [(i, available[i] - used[i], used[i]) for i in range(len(available))]
-                # idle GPUs first (used==0), then by most free memory
                 gpu_status.sort(key=lambda x: (x[2] > 0, -x[1]))
                 candidate_idxs = [i for i, free, u in gpu_status if free >= job_mem]
                 if len(candidate_idxs) >= job.gpus:
@@ -124,15 +124,24 @@ class Scheduler:
                         cmd = f'cd {home_dir} && source venv/bin/activate && {job.cmd}'
                     else:
                         cmd = f'cd {home_dir} && {job.cmd}'
-                    # Print log to user terminal using 'write' or 'wall'
-                    log_msg = f"[MGPU] Job {job.id} started on GPUs {selected_idxs} with mem {job_mem}MB\n"
-                    try:
-                        # Try 'write' to user (if user is logged in)
-                        subprocess.run(['sudo', '-u', job.user, 'bash', '-c', f'echo "{log_msg}" | write {job.user}'], check=False)
-                    except Exception:
+                    log_msg = f"[MGPU] Job {job.id} started on GPUs {selected_idxs} with mem {job_mem}MB (priority={getattr(job, 'priority', 0)})\n"
+                    # Print debug info to server console
+                    print(f"[DEBUG] Launching job {job.id} for user {job.user} on GPUs {selected_idxs} with mem {job_mem}MB, priority={getattr(job, 'priority', 0)}")
+                    # Try to print to user terminal using 'write' if user is logged in
+                    who = subprocess.check_output(['who']).decode()
+                    user_logged_in = any(job.user in line for line in who.splitlines())
+                    if user_logged_in:
+                        try:
+                            subprocess.run(['sudo', '-u', job.user, 'bash', '-c', f'echo "{log_msg}" | write {job.user}'], check=False)
+                        except Exception as e:
+                            print(f"[DEBUG] write failed: {e}")
+                    else:
                         # Fallback: try 'wall' (broadcast to all)
-                        subprocess.run(['wall', log_msg], check=False)
-                    # Start process, print output to user terminal in real time
+                        try:
+                            subprocess.run(['wall', log_msg], check=False)
+                        except Exception as e:
+                            print(f"[DEBUG] wall failed: {e}")
+                    # Start process, print output to all user terminals using wall as fallback
                     proc = subprocess.Popen([
                         'sudo', '-u', job.user, 'bash', '-lc', cmd
                     ], env=env)
@@ -165,7 +174,8 @@ def handle_client(conn, scheduler, max_job_time):
                     conn.send(json.dumps({'status':'fail','job_id':job_id,'msg':msg}).encode())
                     return
             time_limit = req.get('time_limit')
-            job = Job(req['user'], req['gpus'], mem, req['cmdline'], time_limit)
+            priority = req.get('priority', 0)
+            job = Job(req['user'], req['gpus'], mem, req['cmdline'], time_limit, priority)
             job_id = scheduler.submit_job(job)
             conn.send(json.dumps({'status':'ok','job_id':job_id}).encode())
         elif cmd == 'queue':
