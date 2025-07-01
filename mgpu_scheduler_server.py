@@ -11,6 +11,7 @@ import string
 import argparse
 from collections import deque
 import psutil
+import pwd
 
 SOCKET_PATH = '/tmp/mgpu_scheduler.sock'
 MAX_JOB_TIME = 600  # 최대 점유시간(초), 필요시 main에서 인자로 받을 수 있음
@@ -155,6 +156,12 @@ class Scheduler:
                     # Save log file to server user's home directory
                     server_home = os.path.expanduser('~')
                     log_file = os.path.join(server_home, f'.mgpu_job_{job.id}.log')
+                    user_info = pwd.getpwnam(job.user)
+                    def demote(user_uid, user_gid):
+                        def result():
+                            os.setgid(user_gid)
+                            os.setuid(user_uid)
+                        return result
                     # Print log message to wall for user notification
                     # log_msg = f"[MGPU] Job {job.id} started on GPUs {selected_idxs} with mem {job_mem}MB (priority={getattr(job, 'priority', 0)})\n"
                     # try:
@@ -164,8 +171,8 @@ class Scheduler:
                     # Start process, redirect output to server user's log file
                     with open(log_file, 'a') as lf:
                         proc = subprocess.Popen([
-                            'sudo', '-u', job.user, 'bash', '-lc', cmd
-                        ], env=env, stdout=lf, stderr=lf, preexec_fn=os.setsid)
+                            'bash', '-lc', cmd
+                        ], env=env, stdout=lf, stderr=lf, preexec_fn=demote(user_info.pw_uid, user_info.pw_gid), close_fds=True)
                     job.proc = proc
                     job.status = 'running'
                     job.start_time = time.time()
