@@ -124,27 +124,20 @@ class Scheduler:
                         cmd = f'cd {home_dir} && source venv/bin/activate && {job.cmd}'
                     else:
                         cmd = f'cd {home_dir} && {job.cmd}'
+                    # Save log file to server user's home directory
+                    server_home = os.path.expanduser('~')
+                    log_file = os.path.join(server_home, f'.mgpu_job_{job.id}.log')
+                    # Print log message to wall for user notification
                     log_msg = f"[MGPU] Job {job.id} started on GPUs {selected_idxs} with mem {job_mem}MB (priority={getattr(job, 'priority', 0)})\n"
-                    # Print debug info to server console
-                    print(f"[DEBUG] Launching job {job.id} for user {job.user} on GPUs {selected_idxs} with mem {job_mem}MB, priority={getattr(job, 'priority', 0)}")
-                    # Try to print to user terminal using 'write' if user is logged in
-                    who = subprocess.check_output(['who']).decode()
-                    user_logged_in = any(job.user in line for line in who.splitlines())
-                    if user_logged_in:
-                        try:
-                            subprocess.run(['sudo', '-u', job.user, 'bash', '-c', f'echo "{log_msg}" | write {job.user}'], check=False)
-                        except Exception as e:
-                            print(f"[DEBUG] write failed: {e}")
-                    else:
-                        # Fallback: try 'wall' (broadcast to all)
-                        try:
-                            subprocess.run(['wall', log_msg], check=False)
-                        except Exception as e:
-                            print(f"[DEBUG] wall failed: {e}")
-                    # Start process, print output to all user terminals using wall as fallback
-                    proc = subprocess.Popen([
-                        'sudo', '-u', job.user, 'bash', '-lc', cmd
-                    ], env=env)
+                    try:
+                        subprocess.run(['wall', log_msg], check=False)
+                    except Exception as e:
+                        print(f"[DEBUG] wall failed: {e}")
+                    # Start process, redirect output to server user's log file
+                    with open(log_file, 'a') as lf:
+                        proc = subprocess.Popen([
+                            'sudo', '-u', job.user, 'bash', '-lc', cmd
+                        ], env=env, stdout=lf, stderr=lf, preexec_fn=os.setsid)
                     job.proc = proc
                     job.status = 'running'
                     job.start_time = time.time()
