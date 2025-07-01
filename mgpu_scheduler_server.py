@@ -92,6 +92,15 @@ class Scheduler:
                     for i in range(running_job.gpus):
                         if i < len(used):
                             used[i] += running_job.mem
+            # User priority table (can be loaded from config or set here)
+            user_priority = {
+                # 'username': priority (higher is more important)
+                # Example:
+                # 'alice': 10,
+                # 'bob': 5,
+            }
+            # Sort queue by user priority (descending), then FIFO
+            self.job_queue = deque(sorted(self.job_queue, key=lambda job: (-user_priority.get(job.user, 0), job.id)))
             for job in list(self.job_queue):
                 job_mem = job.mem if job.mem is not None else min_mem
                 if job_mem > max_mem or job_mem < 1:
@@ -115,23 +124,18 @@ class Scheduler:
                         cmd = f'cd {home_dir} && source venv/bin/activate && {job.cmd}'
                     else:
                         cmd = f'cd {home_dir} && {job.cmd}'
-                    # Log file for user
-                    log_file = os.path.join(home_dir, f'.mgpu_job_{job.id}.log')
-                    # Debug log if enabled
-                    debug_file = os.path.join(home_dir, '.mgpu_debug')
-                    debug = os.path.exists(debug_file)
-                    if debug:
-                        with open(debug_file, 'a') as dbg:
-                            dbg.write(f"[DEBUG] Launching job {job.id} for user {job.user} on GPUs {selected_idxs} with mem {job_mem}\n")
-                            dbg.flush()
-                    with open(log_file, 'a') as lf:
-                        lf.write(f"[INFO] Launching job {job.id} on GPUs {selected_idxs} with mem {job_mem}\n")
-                        lf.flush()
-                    # Start process, redirect output to log file
-                    with open(log_file, 'a') as lf:
-                        proc = subprocess.Popen([
-                            'sudo', '-u', job.user, 'bash', '-lc', cmd
-                        ], env=env, stdout=lf, stderr=lf)
+                    # Print log to user terminal using 'write' or 'wall'
+                    log_msg = f"[MGPU] Job {job.id} started on GPUs {selected_idxs} with mem {job_mem}MB\n"
+                    try:
+                        # Try 'write' to user (if user is logged in)
+                        subprocess.run(['sudo', '-u', job.user, 'bash', '-c', f'echo "{log_msg}" | write {job.user}'], check=False)
+                    except Exception:
+                        # Fallback: try 'wall' (broadcast to all)
+                        subprocess.run(['wall', log_msg], check=False)
+                    # Start process, print output to user terminal in real time
+                    proc = subprocess.Popen([
+                        'sudo', '-u', job.user, 'bash', '-lc', cmd
+                    ], env=env)
                     job.proc = proc
                     job.status = 'running'
                     job.start_time = time.time()
