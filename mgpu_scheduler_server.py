@@ -65,7 +65,11 @@ class Scheduler:
             if job_id in self.running_jobs:
                 proc = self.running_jobs[job_id].proc
                 if proc:
-                    proc.terminate()
+                    try:
+                        # Kill the whole process group
+                        os.killpg(os.getpgid(proc.pid), 9)
+                    except Exception as e:
+                        print(f"[DEBUG] Failed to kill process group: {e}")
                 del self.running_jobs[job_id]
                 return True
         return False
