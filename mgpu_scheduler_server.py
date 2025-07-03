@@ -153,27 +153,21 @@ class Scheduler:
                     for idx in selected_idxs:
                         used[idx] += job_mem
                     env = os.environ.copy()
-                    env['CUDA_VISIBLE_DEVICES'] = ','.join(str(i) for i in selected_idxs)
+                    # Build CUDA_VISIBLE_DEVICES string
+                    cuda_env = f"CUDA_VISIBLE_DEVICES={','.join(str(i) for i in selected_idxs)}"
                     home_dir = os.path.expanduser(f'~{job.user}')
-                    venv_activate = os.path.join(home_dir, 'venv', 'bin', 'activate')
-                    if os.path.exists(venv_activate):
-                        cmd = f'cd {home_dir} && source venv/bin/activate && {job.cmd}'
+                    env_setup_cmd = getattr(job, 'env_setup_cmd', None)
+                    if env_setup_cmd:
+                        cmd = f"cd {home_dir} && {cuda_env} {env_setup_cmd} && {job.cmd}"
                     else:
-                        cmd = f'cd {home_dir} && {job.cmd}'
+                        cmd = f"cd {home_dir} && {cuda_env} {job.cmd}"
                     # Save log file to server user's home directory
                     server_home = os.path.expanduser('~')
                     log_file = os.path.join(server_home, f'.mgpu_job_{job.id}.log')
-                    # Print log message to wall for user notification
-                    # log_msg = f"[MGPU] Job {job.id} started on GPUs {selected_idxs} with mem {job_mem}MB (priority={getattr(job, 'priority', 0)})\n"
-                    # try:
-                    #     subprocess.run(['wall', log_msg], check=False)
-                    # except Exception as e:
-                    #     print(f"[DEBUG] wall failed: {e}")
-                    # Start process, redirect output to server user's log file
                     with open(log_file, 'a') as lf:
                         proc = subprocess.Popen([
                             'sudo', '-u', job.user, 'bash', '-lc', cmd
-                        ], env=env, stdout=lf, stderr=lf, preexec_fn=os.setsid)
+                        ], stdout=lf, stderr=lf, preexec_fn=os.setsid)
                     job.proc = proc
                     job.status = 'running'
                     job.start_time = time.time()

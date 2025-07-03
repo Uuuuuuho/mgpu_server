@@ -8,7 +8,7 @@ import getpass
 def main():
     # Parse command line arguments for job submission
     if '--gpu-ids' not in sys.argv or '--' not in sys.argv:
-        print('Usage: mgpu_srun --gpu-ids <ID1,ID2,...> [--mem <MB>] [--time-limit <sec>] [--priority <N>] -- <command>')
+        print('Usage: mgpu_srun --gpu-ids <ID1,ID2,...> [--mem <MB>] [--time-limit <sec>] [--priority <N>] [--env-setup-cmd <CMD>] -- <command>')
         sys.exit(1)
     gpu_ids = sys.argv[sys.argv.index('--gpu-ids')+1].split(',')
     gpus = len(gpu_ids)
@@ -21,6 +21,9 @@ def main():
     priority = 0
     if '--priority' in sys.argv:
         priority = int(sys.argv[sys.argv.index('--priority')+1])
+    env_setup_cmd = None
+    if '--env-setup-cmd' in sys.argv:
+        env_setup_cmd = sys.argv[sys.argv.index('--env-setup-cmd')+1]
     cmd_idx = sys.argv.index('--')+1
     cmdline = ' '.join(sys.argv[cmd_idx:])
     user = getpass.getuser()
@@ -29,6 +32,8 @@ def main():
         req['mem'] = mem
     if time_limit is not None:
         req['time_limit'] = time_limit
+    if env_setup_cmd is not None:
+        req['env_setup_cmd'] = env_setup_cmd
     # Connect to the scheduler server and submit the job
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect('/tmp/mgpu_scheduler.sock')
