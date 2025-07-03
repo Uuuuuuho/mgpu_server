@@ -6,10 +6,12 @@ import json
 import getpass
 
 def main():
-    if '--gpus' not in sys.argv or '--' not in sys.argv:
-        print('Usage: mgpu_srun --gpus <N> [--mem <MB>] [--time-limit <sec>] [--priority <N>] -- <command>')
+    # Parse command line arguments for job submission
+    if '--gpu-ids' not in sys.argv or '--' not in sys.argv:
+        print('Usage: mgpu_srun --gpu-ids <ID1,ID2,...> [--mem <MB>] [--time-limit <sec>] [--priority <N>] -- <command>')
         sys.exit(1)
-    gpus = int(sys.argv[sys.argv.index('--gpus')+1])
+    gpu_ids = sys.argv[sys.argv.index('--gpu-ids')+1].split(',')
+    gpus = len(gpu_ids)
     mem = None
     if '--mem' in sys.argv:
         mem = int(sys.argv[sys.argv.index('--mem')+1])
@@ -22,11 +24,12 @@ def main():
     cmd_idx = sys.argv.index('--')+1
     cmdline = ' '.join(sys.argv[cmd_idx:])
     user = getpass.getuser()
-    req = {'cmd':'submit','user':user,'gpus':gpus,'cmdline':cmdline, 'priority': priority}
+    req = {'cmd':'submit','user':user,'gpus':gpus,'gpu_ids':gpu_ids,'cmdline':cmdline, 'priority': priority}
     if mem is not None:
         req['mem'] = mem
     if time_limit is not None:
         req['time_limit'] = time_limit
+    # Connect to the scheduler server and submit the job
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect('/tmp/mgpu_scheduler.sock')
     s.send(json.dumps(req).encode())

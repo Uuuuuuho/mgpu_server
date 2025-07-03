@@ -4,6 +4,7 @@ import socket
 import json
 
 def main():
+    # Cancel a job by job ID
     if len(sys.argv) < 2:
         print('Usage: mgpu_cancel <job_id>')
         sys.exit(1)

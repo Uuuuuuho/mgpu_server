@@ -16,7 +16,7 @@ SOCKET_PATH = '/tmp/mgpu_scheduler.sock'
 MAX_JOB_TIME = 600  # 최대 점유시간(초), 필요시 main에서 인자로 받을 수 있음
 
 class Job:
-    def __init__(self, user, gpus, mem, cmd, time_limit=None, priority=0):
+    def __init__(self, user, gpus, mem, cmd, time_limit=None, priority=0, gpu_ids=None):
         self.id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         self.user = user
         self.gpus = gpus
@@ -27,6 +27,7 @@ class Job:
         self.start_time = None  # 실행 시작 시간
         self.time_limit = time_limit  # 유저별 시간 제한(초)
         self.priority = priority
+        self.gpu_ids = gpu_ids  # 사용자가 요청한 특정 GPU ID
 
     def to_dict(self):
         return {
@@ -35,7 +36,8 @@ class Job:
             'gpus': self.gpus,
             'mem': self.mem,
             'cmd': self.cmd,
-            'status': self.status
+            'status': self.status,
+            'gpu_ids': self.gpu_ids
         }
 
 def get_available_gpus():
@@ -139,7 +141,13 @@ class Scheduler:
                 # GPU allocation: prefer idle GPUs, then those with most free memory
                 gpu_status = [(i, available[i] - used[i], used[i]) for i in range(len(available))]
                 gpu_status.sort(key=lambda x: (x[2] > 0, -x[1]))
-                candidate_idxs = [i for i, free, u in gpu_status if free >= job_mem]
+
+                if job.gpu_ids:
+                    # Validate requested GPU IDs
+                    candidate_idxs = [i for i in job.gpu_ids if i < len(available) and available[i] - used[i] >= job_mem]
+                else:
+                    candidate_idxs = [i for i, free, u in gpu_status if free >= job_mem]
+
                 if len(candidate_idxs) >= job.gpus:
                     selected_idxs = candidate_idxs[:job.gpus]
                     for idx in selected_idxs:
@@ -196,7 +204,8 @@ def handle_client(conn, scheduler, max_job_time):
                     return
             time_limit = req.get('time_limit')
             priority = req.get('priority', 0)
-            job = Job(req['user'], req['gpus'], mem, req['cmdline'], time_limit, priority)
+            gpu_ids = req.get('gpu_ids')
+            job = Job(req['user'], req['gpus'], mem, req['cmdline'], time_limit, priority, gpu_ids)
             job_id = scheduler.submit_job(job)
             conn.send(json.dumps({'status':'ok','job_id':job_id}).encode())
         elif cmd == 'queue':

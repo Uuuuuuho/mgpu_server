@@ -3,6 +3,7 @@ import socket
 import json
 
 def main():
+    # Query the scheduler server for the current queue and running jobs
     req = {'cmd':'queue'}
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect('/tmp/mgpu_scheduler.sock')
