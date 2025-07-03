@@ -16,7 +16,7 @@ SOCKET_PATH = '/tmp/mgpu_scheduler.sock'
 MAX_JOB_TIME = 600  # 최대 점유시간(초), 필요시 main에서 인자로 받을 수 있음
 
 class Job:
-    def __init__(self, user, gpus, mem, cmd, time_limit=None, priority=0, gpu_ids=None):
+    def __init__(self, user, gpus, mem, cmd, time_limit=None, priority=0, gpu_ids=None, env_setup_cmd=None):
         self.id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         self.user = user
         self.gpus = gpus
@@ -28,6 +28,7 @@ class Job:
         self.time_limit = time_limit  # 유저별 시간 제한(초)
         self.priority = priority
         self.gpu_ids = gpu_ids  # 사용자가 요청한 특정 GPU ID
+        self.env_setup_cmd = env_setup_cmd  # 사용자가 요청한 환경설정 명령어
 
     def to_dict(self):
         return {
@@ -37,7 +38,8 @@ class Job:
             'mem': self.mem,
             'cmd': self.cmd,
             'status': self.status,
-            'gpu_ids': self.gpu_ids
+            'gpu_ids': self.gpu_ids,
+            'env_setup_cmd': self.env_setup_cmd
         }
 
 def get_available_gpus():
@@ -195,7 +197,8 @@ def handle_client(conn, scheduler, max_job_time):
             time_limit = req.get('time_limit')
             priority = req.get('priority', 0)
             gpu_ids = req.get('gpu_ids')
-            job = Job(req['user'], req['gpus'], mem, req['cmdline'], time_limit, priority, gpu_ids)
+            env_setup_cmd = req.get('env_setup_cmd')
+            job = Job(req['user'], req['gpus'], mem, req['cmdline'], time_limit, priority, gpu_ids, env_setup_cmd)
             job_id = scheduler.submit_job(job)
             conn.send(json.dumps({'status':'ok','job_id':job_id}).encode())
         elif cmd == 'queue':
