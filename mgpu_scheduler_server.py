@@ -143,8 +143,8 @@ class Scheduler:
                 gpu_status.sort(key=lambda x: (x[2] > 0, -x[1]))
 
                 if job.gpu_ids:
-                    # Validate requested GPU IDs
-                    candidate_idxs = [i for i in job.gpu_ids if i < len(available) and available[i] - used[i] >= job_mem]
+                    # Validate requested GPU IDs (convert to int if needed)
+                    candidate_idxs = [int(i) for i in job.gpu_ids if int(i) < len(available) and available[int(i)] - used[int(i)] >= job_mem]
                 else:
                     candidate_idxs = [i for i, free, u in gpu_status if free >= job_mem]
 
