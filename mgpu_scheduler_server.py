@@ -155,12 +155,8 @@ class Scheduler:
                     env = os.environ.copy()
                     # Build CUDA_VISIBLE_DEVICES string
                     cuda_env = f"CUDA_VISIBLE_DEVICES={','.join(str(i) for i in selected_idxs)}"
-                    home_dir = os.path.expanduser(f'~{job.user}')
                     env_setup_cmd = getattr(job, 'env_setup_cmd', None)
-                    if env_setup_cmd:
-                        cmd = f"cd {home_dir} && {cuda_env} {env_setup_cmd} && {job.cmd}"
-                    else:
-                        cmd = f"cd {home_dir} && {cuda_env} {job.cmd}"
+                    cmd = f"{env_setup_cmd} && {cuda_env} {job.cmd}"
                     # Save log file to server user's home directory
                     server_home = os.path.expanduser('~')
                     log_file = os.path.join(server_home, f'.mgpu_job_{job.id}.log')
