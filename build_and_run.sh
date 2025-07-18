@@ -11,10 +11,20 @@ if ! command -v pyinstaller &> /dev/null; then
 fi
 
 # 2. 바이너리 빌드
-for f in mgpu_scheduler_server.py mgpu_srun.py mgpu_queue.py mgpu_cancel.py; do
+for f in src/mgpu_scheduler_server.py src/mgpu_srun.py src/mgpu_queue.py src/mgpu_cancel.py; do
     if [ -f "$f" ]; then
         echo "[INFO] 빌드: $f"
-        pyinstaller --onefile "$f"
+        # Get the base name without path and extension for spec file
+        basename=$(basename "$f" .py)
+        spec_file="build-config/${basename}.spec"
+        
+        # Always build directly from source (spec files can have path issues)
+        # Add explicit hidden imports for dependencies
+        if [ "$f" = "src/mgpu_scheduler_server.py" ]; then
+            pyinstaller --onefile --hidden-import=psutil --hidden-import=select "$f"
+        else
+            pyinstaller --onefile "$f"
+        fi
     fi
 done
 
