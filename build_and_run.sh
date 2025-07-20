@@ -1,66 +1,44 @@
 #!/bin/bash
-# Build and run script for Python server/client binaries on Ubuntu 22.x
-# Usage: ./build_and_run.sh
+# Ubuntu 22.x 환경에서 Python 서버/클라이언트 바이너리 빌드 및 실행 스크립트
+# 사용법: ./build_and_run.sh
 
 set -e
 
-# 1. Install pyinstaller if needed
+# 1. pyinstaller 설치 (필요시)
 if ! command -v pyinstaller &> /dev/null; then
-  echo "[INFO] pyinstaller is not installed. Installing now."
-  pip install pyinstaller
+    echo "[INFO] pyinstaller가 설치되어 있지 않습니다. 설치를 진행합니다."
+    pip install pyinstaller
 fi
 
-# 2. Build binaries
-echo "[INFO] Building single-node components..."
+# 2. 바이너리 빌드
 for f in src/mgpu_scheduler_server.py src/mgpu_srun.py src/mgpu_queue.py src/mgpu_cancel.py; do
-  if [ -f "$f" ]; then
-    echo "[INFO] Building: $f"
-    # Add explicit hidden imports for dependencies
-    if [ "$f" = "src/mgpu_scheduler_server.py" ]; then
-      pyinstaller --onefile --hidden-import=psutil --hidden-import=select "$f"
-    else
-      pyinstaller --onefile "$f"
+    if [ -f "$f" ]; then
+        echo "[INFO] 빌드: $f"
+        # Get the base name without path and extension for spec file
+        basename=$(basename "$f" .py)
+        spec_file="build-config/${basename}.spec"
+        
+        # Always build directly from source (spec files can have path issues)
+        # Add explicit hidden imports for dependencies
+        if [ "$f" = "src/mgpu_scheduler_server.py" ]; then
+            pyinstaller --onefile --hidden-import=psutil --hidden-import=select "$f"
+        else
+            pyinstaller --onefile "$f"
+        fi
     fi
-  fi
 done
 
-echo "[INFO] Building multi-node components..."
-for f in src/mgpu_master_server.py src/mgpu_node_agent.py src/mgpu_srun_multinode.py; do
-  if [ -f "$f" ]; then
-    echo "[INFO] Building: $f"
-    # Multi-node components need additional dependencies
-    if [ "$f" = "src/mgpu_master_server.py" ] || [ "$f" = "src/mgpu_node_agent.py" ]; then
-      pyinstaller --onefile --hidden-import=psutil --hidden-import=yaml --hidden-import=dataclasses "$f"
-    else
-      pyinstaller --onefile "$f"
-    fi
-  fi
-done
-
-# 3. Run instructions
+# 3. 실행 안내
 cat <<EOF
 
-[INFO] Build complete! Executables are generated in the dist/ directory.
+[INFO] 빌드 완료! 실행 파일은 dist/ 디렉토리에 생성됩니다.
 
-=== Single Node Mode ===
-Run server:
-  sudo ./dist/mgpu_scheduler_server
+서버 실행:
+  ./dist/mgpu_scheduler_server
 
-Client examples:
-  ./dist/mgpu_srun --gpu-ids 0,1 -- python train.py
+클라이언트 예시:
+  ./dist/mgpu_srun --gpus 1 --mem 8000 -- echo hello
   ./dist/mgpu_queue
   ./dist/mgpu_cancel <job_id>
 
-=== Multi-Node Mode ===
-Run master server:
-  sudo ./dist/mgpu_master_server --config cluster_config.yaml
-
-Run node agent (on each compute node):
-  sudo ./dist/mgpu_node_agent --node-id node001 --master-host <MASTER_IP> --master-port 8080
-
-Multi-node client examples:
-  ./dist/mgpu_srun_multinode --nodes 2 --gpus-per-node 4 --distributed -- torchrun train.py
-  ./dist/mgpu_srun_multinode --nodelist node001,node002 --gpus-per-node 2 -- python train.py
-
 EOF
-

@@ -2,18 +2,15 @@
 
 ## Overview
 
-This project provides a multi-user, multi-GPU job scheduling system for efficient and fair GPU resource sharing across **single or multiple nodes**. It offers a Slurm-like CLI (`mgpu_srun`, `mgpu_queue`, `mgpu_cancel`) and supports resource-aware scheduling, queueing, user/job cancellation, per-job and global time limits, flexible environment setup, and **distributed multi-node execution**.
+This project provides a multi-user, multi-GPU job scheduling system for efficient and fair GPU resource sharing. It offers a Slurm-like CLI (`mgpu_srun`, `mgpu_queue`, `mgpu_cancel`) and supports resource-aware scheduling, queueing, user/job cancellation, per-job and global time limits, and flexible environment setup.
 
 ## Project Structure
 
 ```
 multigpu_scheduler/
 ├── src/                     # Source code
-│   ├── mgpu_scheduler_server.py  # Single-node scheduler server
-│   ├── mgpu_master_server.py     # Multi-node master server (NEW)
-│   ├── mgpu_node_agent.py        # Node agent for multi-node (NEW)
-│   ├── mgpu_srun.py             # Single-node job submission client
-│   ├── mgpu_srun_multinode.py   # Multi-node job submission client (NEW)
+│   ├── mgpu_scheduler_server.py  # Main scheduler server
+│   ├── mgpu_srun.py             # Job submission client
 │   ├── mgpu_queue.py            # Queue status viewer
 │   └── mgpu_cancel.py           # Job cancellation tool
 ├── test/                    # Test scripts
@@ -21,10 +18,11 @@ multigpu_scheduler/
 │   ├── test_cancellation.py    # Job cancellation test
 │   └── README.md               # Test documentation
 ├── build-config/            # PyInstaller configuration files
-├── docs/                    # Documentation
-│   └── multi-node-design.md    # Multi-node architecture design
+│   ├── mgpu_scheduler_server.spec
+│   ├── mgpu_srun.spec
+│   ├── mgpu_queue.spec
+│   └── mgpu_cancel.spec
 ├── dist/                    # Built binaries (after build)
-├── cluster_config.yaml      # Multi-node cluster configuration
 ├── build_and_run.sh         # Build script
 ├── Makefile                 # Build automation
 └── README.md               # This file
@@ -33,26 +31,16 @@ multigpu_scheduler/
 ---
 
 ## Features
-
-### Single-Node Features
 - Multiple users can submit jobs concurrently
 - Slurm-style CLI: `mgpu_srun` (job submission), `mgpu_queue` (queue/status), `mgpu_cancel` (job cancellation)
 - Specific GPU selection: users can specify exact GPU IDs to use
 - Resource allocation based on GPU memory requirements
 - Fair scheduling: jobs are queued if resources are insufficient, and started automatically when available
 - Per-job and global time limits, with context switching (move to end of queue)
-- Interactive mode with real-time output streaming
-- Automatic job cancellation when client disconnects
-
-### Multi-Node Features (NEW)
-- **Multi-node distributed job execution** across GPU clusters
-- **Automatic node selection** and resource allocation
-- **PyTorch distributed training** support with automatic environment setup
-- **MPI-based distributed execution** support
-- **Node-specific job placement** (--nodelist, --exclude options)
-- **Cluster-wide resource monitoring** and load balancing
-- **Fault tolerance** with node failure detection and recovery
-- **Network topology-aware scheduling** for optimal performance
+- Unique job IDs, with queue/running status and cancellation support
+- Flexible environment setup: users can specify custom environment activation commands
+- Robust logging: job logs are saved to the server user's home directory
+- Proper CUDA_VISIBLE_DEVICES handling for distributed training (torchrun, etc.)
 
 ---
 
@@ -103,64 +91,34 @@ python src/mgpu_cancel.py <job_id>
 
 ## Usage
 
-### Single-Node Mode
-
-#### Start the Server (as root)
+### Start the Server (as root)
 ```bash
 sudo ./dist/mgpu_scheduler_server --max-job-time 3600
 ```
+- `--max-job-time`: (optional) Maximum allowed time per job (seconds)
 
-#### Client Examples
+### Client Examples
 ```bash
 # Submit an interactive job (see output in real-time)
-./dist/mgpu_srun --gpu-ids 0 -- python train.py
+./dist/mgpu_srun --gpu-ids 0 --interactive -- python train.py
 
-# Submit a background job
-./dist/mgpu_srun --gpu-ids 0,1 --mem 8000 --time-limit 600 --background -- python train.py
-```
+# Submit a background job (runs silently)
+./dist/mgpu_srun --gpu-ids 0,1 --mem 8000 --time-limit 600 -- torchrun --nproc_per_node=2 train.py
 
-### Multi-Node Mode (NEW)
+# Submit a job with custom environment setup
+./dist/mgpu_srun --gpu-ids 2 --env-setup-cmd "source venv/bin/activate" -- python train.py
 
-#### 1. Setup Cluster Configuration
-```bash
-# Copy and modify cluster configuration
-cp cluster_config.yaml /etc/mgpu_cluster.yaml
-# Edit the file with your cluster node information
-```
+# Submit a job with conda environment activation
+./dist/mgpu_srun --gpu-ids 1 --env-setup-cmd "conda activate myenv" -- python inference.py
 
-#### 2. Start Master Server
-```bash
-# On the master node
-sudo ./dist/mgpu_master_server --config /etc/mgpu_cluster.yaml --port 8080
-```
+# Submit a job with priority (higher number = higher priority)
+./dist/mgpu_srun --gpu-ids 0 --priority 10 -- python important_task.py
 
-#### 3. Start Node Agents
-```bash
-# On each compute node
-sudo ./dist/mgpu_node_agent --node-id node001 --master-host master.example.com --master-port 8080 --agent-port 8081
-```
+# View queue and running jobs
+./dist/mgpu_queue
 
-#### 4. Submit Multi-Node Jobs
-```bash
-# PyTorch distributed training across 2 nodes, 4 GPUs per node
-./dist/mgpu_srun_multinode --nodes 2 --gpus-per-node 4 --distributed -- \
-  torchrun --nnodes=2 --nproc_per_node=4 --master_addr=\$MASTER_ADDR --master_port=29500 train.py
-
-# MPI distributed execution
-./dist/mgpu_srun_multinode --nodes 4 --gpus-per-node 2 --mpi -- \
-  mpirun -np 8 python mpi_train.py
-
-# Specific node selection
-./dist/mgpu_srun_multinode --nodelist node001,node002 --gpus-per-node 2 -- python train.py
-
-# Single node with specific GPUs (same as single-node mode)
-./dist/mgpu_srun_multinode --gpu-ids 0,1,2,3 -- python train.py
-```
-
-### Environment Variables for Multi-Node
-```bash
-export MGPU_MASTER_HOST=master.example.com
-export MGPU_MASTER_PORT=8080
+# Cancel a job
+./dist/mgpu_cancel <job_id>
 ```
 
 ---
