@@ -1,0 +1,50 @@
+# Multi-Node GPU Cluster Configuration
+# This file configures the multi-node GPU scheduler cluster
+
+cluster:
+  name: "gpu-cluster"           # 클러스터 이름
+  master:
+    host: "localhost"           # 마스터 서버 호스트 (single node의 경우 localhost)
+    port: 8080                  # 마스터 서버 포트
+  
+# Node definitions - 계산 노드들의 정의
+# Single node 환경에서는 하나의 노드만 정의
+nodes:
+  - node_id: "node001"          # 노드 고유 ID
+    hostname: "localhost"       # 노드 호스트명
+    ip: "127.0.0.1"            # 노드 IP 주소
+    port: 8081                  # 노드 에이전트 포트
+    gpu_count: 1                # 이 노드의 GPU 개수
+    gpu_type: "RTX 3060"        # GPU 타입 (참고용)
+
+# 여러 노드를 사용하는 경우 추가 노드들:
+#  - node_id: "node002"
+#    hostname: "compute-node-2"
+#    ip: "192.168.1.102"
+#    port: 8081
+#    gpu_count: 2
+#    gpu_type: "RTX 4090"
+    
+# Network configuration - 네트워크 설정
+networking:
+  heartbeat_interval: 30        # 노드 간 하트비트 간격 (초)
+  timeout: 60                   # 연결 타임아웃 (초)
+  
+# Scheduling policies - 스케줄링 정책
+scheduling:
+  default_policy: "fill_first"  # 스케줄링 정책
+                                # - fill_first: 한 노드를 먼저 채우고 다음 노드로
+                                # - spread: 여러 노드에 균등하게 분산
+                                # - custom: 사용자 정의 정책
+  max_job_time: 3600           # 최대 작업 실행 시간 (초)
+  
+# Security settings (optional) - 보안 설정 (선택사항)
+security:
+  enable_ssl: false             # SSL 사용 여부
+  cert_file: ""                 # SSL 인증서 파일 경로
+  key_file: ""                  # SSL 키 파일 경로
+  
+# Logging - 로깅 설정
+logging:
+  level: "INFO"                 # 로그 레벨 (DEBUG, INFO, WARNING, ERROR)
+  file: "mgpu_cluster.log"      # 로그 파일 경로 (Windows에서는 상대경로 권장)
