@@ -11,6 +11,7 @@ dist/
 
 # VSCode
 .vscode/
+.venv/
 
 # OS/Editor
 .DS_Store
