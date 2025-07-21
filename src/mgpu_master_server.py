@@ -391,6 +391,64 @@ class MultiNodeScheduler:
                 print(f"[ERROR] Failed to start distributed job {job.id} on node {node_id}: {e}")
                 job.status = "failed"
                 break
+    
+    def cancel_job(self, job_id: str) -> bool:
+        """작업 취소"""
+        with self.lock:
+            # 큐에서 찾기
+            for job in list(self.job_queue):
+                if job.id == job_id:
+                    self.job_queue.remove(job)
+                    print(f"[INFO] Cancelled queued job {job_id}")
+                    return True
+            
+            # 실행 중인 작업에서 찾기
+            if job_id in self.running_jobs:
+                job = self.running_jobs[job_id]
+                try:
+                    # 각 노드에 취소 요청 전송
+                    if job.assigned_nodes:
+                        for node_id in job.assigned_nodes:
+                            if node_id == "localhost":
+                                continue  # localhost는 실제 취소 없이 로그만
+                            
+                            node = self.resource_manager.nodes.get(node_id)
+                            if node and node.status == "online":
+                                try:
+                                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                    sock.settimeout(5.0)
+                                    sock.connect((node.ip, node.port))
+                                    
+                                    cancel_request = {
+                                        "cmd": "cancel_job",
+                                        "job_id": job_id
+                                    }
+                                    sock.send(json.dumps(cancel_request).encode())
+                                    
+                                    response_data = sock.recv(4096).decode()
+                                    response = json.loads(response_data)
+                                    
+                                    if response.get('status') == 'ok':
+                                        print(f"[INFO] Cancelled job {job_id} on node {node_id}")
+                                    else:
+                                        print(f"[WARNING] Failed to cancel job {job_id} on node {node_id}")
+                                    
+                                    sock.close()
+                                except Exception as e:
+                                    print(f"[ERROR] Error cancelling job {job_id} on node {node_id}: {e}")
+                    
+                    # 실행 중 작업 목록에서 제거
+                    del self.running_jobs[job_id]
+                    job.status = "cancelled"
+                    print(f"[INFO] Cancelled running job {job_id}")
+                    return True
+                    
+                except Exception as e:
+                    print(f"[ERROR] Error cancelling job {job_id}: {e}")
+                    return False
+            
+            print(f"[WARNING] Job {job_id} not found")
+            return False
 
 def main():
     parser = argparse.ArgumentParser()
@@ -454,6 +512,21 @@ def main():
                 }
                 conn.send(json.dumps(queue_info).encode())
                 print(f"[DEBUG] Queue status sent to {addr}")
+            
+            elif request['cmd'] == 'cancel':
+                # 작업 취소 처리
+                job_id = request.get('job_id')
+                if job_id:
+                    success = scheduler.cancel_job(job_id)
+                    if success:
+                        response = {'status': 'ok', 'message': f'Job {job_id} cancelled'}
+                    else:
+                        response = {'status': 'error', 'message': f'Failed to cancel job {job_id}'}
+                    print(f"[DEBUG] Cancel request for job {job_id}: {'success' if success else 'failed'}")
+                else:
+                    response = {'status': 'error', 'message': 'No job_id provided'}
+                    print(f"[DEBUG] Cancel request failed: No job_id provided")
+                conn.send(json.dumps(response).encode())
             
             elif request['cmd'] == 'heartbeat':
                 # 노드 에이전트로부터의 하트비트 처리

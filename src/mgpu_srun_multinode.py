@@ -159,47 +159,27 @@ def main():
     user = getpass.getuser()
     job_id = generate_job_id()
     
-    # 마스터 서버 연결 (기본값은 TCP, 단일 노드는 UNIX 소켓 지원)
+    # 마스터 서버 연결 (항상 TCP 연결 사용)
     master_host = os.environ.get('MGPU_MASTER_HOST', 'localhost')
     master_port = int(os.environ.get('MGPU_MASTER_PORT', '8080'))
     
-    # 멀티노드 요청인지 확인
-    is_multinode = (distributed_type != 'single' or 
-                   'nodes' in node_requirements or 
-                   'nodelist' in node_requirements)
-    
+    s = None
     try:
-        if is_multinode:
-            # TCP 연결 (멀티노드)
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((master_host, master_port))
-            
-            req = {
-                'cmd': 'submit',
-                'job_id': job_id,
-                'user': user,
-                'cmdline': cmdline,
-                'node_requirements': node_requirements,
-                'total_gpus': node_requirements.get('total_gpus', 1),
-                'distributed_type': distributed_type,
-                'priority': priority,
-                'interactive': interactive
-            }
-            
-        else:
-            # UNIX 소켓 연결 (단일 노드 - 기존 방식)
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.connect('/tmp/mgpu_scheduler.sock')
-            
-            req = {
-                'cmd': 'submit',
-                'user': user,
-                'gpus': node_requirements.get('total_gpus', 1),
-                'gpu_ids': node_requirements.get('gpu_ids', [0]),
-                'cmdline': cmdline,
-                'priority': priority,
-                'interactive': interactive
-            }
+        # 항상 TCP 연결 사용 (단일/멀티 노드 자동 처리)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((master_host, master_port))
+        
+        req = {
+            'cmd': 'submit',
+            'job_id': job_id,
+            'user': user,
+            'cmdline': cmdline,
+            'node_requirements': node_requirements,
+            'total_gpus': node_requirements.get('total_gpus', 1),
+            'distributed_type': distributed_type,
+            'priority': priority,
+            'interactive': interactive
+        }
         
         # 옵션 추가
         if mem is not None:
@@ -216,12 +196,11 @@ def main():
         if resp['status'] == 'ok':
             print(f"Job submitted. ID: {resp['job_id']} (priority={priority})")
             
-            if is_multinode:
-                print(f"Distributed type: {distributed_type}")
-                if 'nodes' in node_requirements:
-                    print(f"Nodes requested: {node_requirements['nodes']}")
-                if 'gpus_per_node' in node_requirements:
-                    print(f"GPUs per node: {node_requirements['gpus_per_node']}")
+            print(f"Distributed type: {distributed_type}")
+            if 'nodes' in node_requirements:
+                print(f"Nodes requested: {node_requirements['nodes']}")
+            if 'gpus_per_node' in node_requirements:
+                print(f"GPUs per node: {node_requirements['gpus_per_node']}")
             
             # 인터랙티브 모드 처리
             if interactive and resp.get('interactive'):
@@ -246,7 +225,8 @@ def main():
                                             print(msg['data'], end='', flush=True)
                                         elif msg['type'] == 'completion':
                                             print(f"\nJob {msg['job_id']} completed with exit code {msg['exit_code']}")
-                                            s.close()
+                                            if s:
+                                                s.close()
                                             return
                                     except json.JSONDecodeError:
                                         print(f"[DEBUG] Non-JSON line: {line}")
@@ -256,13 +236,9 @@ def main():
                 except KeyboardInterrupt:
                     print("\nUser interrupted. Canceling job...")
                     try:
-                        # 취소 요청 전송
-                        if is_multinode:
-                            cancel_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                            cancel_socket.connect((master_host, master_port))
-                        else:
-                            cancel_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                            cancel_socket.connect('/tmp/mgpu_scheduler.sock')
+                        # 취소 요청 전송 (항상 TCP 연결 사용)
+                        cancel_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        cancel_socket.connect((master_host, master_port))
                         
                         cancel_req = {'cmd': 'cancel', 'job_id': job_id}
                         cancel_socket.send(json.dumps(cancel_req).encode())
@@ -276,31 +252,29 @@ def main():
                     except Exception as e:
                         print(f"Error canceling job: {e}")
                 finally:
-                    try:
-                        s.close()
-                    except:
-                        pass
+                    if s:
+                        try:
+                            s.close()
+                        except:
+                            pass
             else:
                 print("Job queued. Use mgpu_queue to check status.")
         else:
             print(f"Submit failed: {resp.get('msg', resp.get('message', ''))}")
     
     except ConnectionRefusedError:
-        if is_multinode:
-            print(f"Error: Cannot connect to master server at {master_host}:{master_port}")
-            print("Make sure mgpu_master_server is running.")
-        else:
-            print("Error: Cannot connect to scheduler server.")
-            print("Make sure mgpu_scheduler_server is running.")
+        print(f"Error: Cannot connect to master server at {master_host}:{master_port}")
+        print("Make sure mgpu_master_server is running.")
         sys.exit(1)
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
     finally:
-        try:
-            s.close()
-        except:
-            pass
+        if s:
+            try:
+                s.close()
+            except:
+                pass
 
 if __name__ == "__main__":
     main()
