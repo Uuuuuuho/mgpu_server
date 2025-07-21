@@ -50,14 +50,14 @@ class DistributedJob:
         return asdict(self)
 
 class ClusterResourceManager:
-    """클러스터 리소스 관리"""
+    """Cluster resource management"""
     
     def __init__(self, config_path: str):
         self.nodes: Dict[str, Node] = {}
         self.load_config(config_path)
         
     def load_config(self, config_path: str):
-        """클러스터 설정 로드"""
+        """Load cluster configuration"""
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
             
@@ -66,15 +66,15 @@ class ClusterResourceManager:
             self.nodes[node.node_id] = node
     
     def connect_to_nodes(self):
-        """모든 노드의 연결 상태 확인"""
+        """Check connection status of all nodes"""
         available_count = 0
         for node_id, node in self.nodes.items():
             try:
-                # 연결 테스트용 임시 소켓 생성
+                # Create temporary socket for connection test
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)  # 5초 타임아웃
+                sock.settimeout(5)  # 5 second timeout
                 sock.connect((node.ip, node.port))
-                sock.close()  # 즉시 연결 해제
+                sock.close()  # Close connection immediately
                 
                 node.status = "online"
                 available_count += 1
@@ -86,12 +86,12 @@ class ClusterResourceManager:
         
         if available_count == 0:
             print(f"[WARNING] No nodes available. Master server will run in standalone mode.")
-            # standalone 모드에서는 localhost 노드를 생성
+            # Create localhost node for standalone mode
             localhost_node = Node(
                 node_id="localhost",
                 hostname="localhost", 
                 ip="127.0.0.1",
-                port=0,  # 실제 연결은 하지 않음
+                port=0,  # No actual connection
                 gpu_count=1,
                 gpu_type="virtual"
             )
@@ -102,12 +102,12 @@ class ClusterResourceManager:
             print(f"[INFO] Found {available_count}/{len(self.nodes)} available nodes")
     
     def get_cluster_resources(self) -> Dict:
-        """클러스터 전체 리소스 조회"""
+        """Query cluster-wide resources"""
         cluster_resources = {}
         for node_id, node in self.nodes.items():
             if node.status == "online":
                 try:
-                    # localhost 노드는 실제 쿼리하지 않고 가상 리소스 반환
+                    # Return virtual resources for localhost node without actual query
                     if node_id == "localhost":
                         cluster_resources[node_id] = {
                             "available_gpus": list(range(node.gpu_count)),
@@ -123,7 +123,7 @@ class ClusterResourceManager:
                     print(f"[DEBUG] Node communication failed, checking if node is offline")
                     node.status = "offline"
             else:
-                # 오프라인 노드도 기본 리소스 정보 제공
+                # Provide default resource info for offline nodes
                 print(f"[INFO] Node {node_id} is offline, using default resource info")
                 cluster_resources[node_id] = {
                     "available_gpus": list(range(node.gpu_count)),
@@ -134,7 +134,7 @@ class ClusterResourceManager:
         return cluster_resources
     
     def query_node_resources(self, node_id: str) -> Dict:
-        """특정 노드의 리소스 조회"""
+        """Query resources from specific node"""
         if node_id not in self.nodes:
             raise Exception(f"Unknown node {node_id}")
         
@@ -143,7 +143,7 @@ class ClusterResourceManager:
         sock = None
         
         try:
-            # 새로운 연결 생성 (heartbeat 방식과 동일)
+            # Create new connection (same as heartbeat method)
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5.0)
             sock.connect((node.ip, node.port))
@@ -157,13 +157,13 @@ class ClusterResourceManager:
             
             response = json.loads(response_data)
             
-            # 응답에서 실제 리소스 정보 추출
+            # Extract actual resource information from response
             if response.get('status') == 'ok' and 'resources' in response:
                 return response['resources']
             elif response.get('status') == 'error':
                 raise Exception(f"Node agent returned error: {response.get('message', 'Unknown error')}")
             else:
-                # 노드 에이전트가 직접 리소스를 반환하는 경우 (이전 버전 호환성)
+                # For backward compatibility when node agent returns resources directly
                 return response
             
         except socket.timeout:
@@ -180,7 +180,7 @@ class ClusterResourceManager:
                     pass
 
 class MultiNodeScheduler:
-    """멀티노드 스케줄러"""
+    """Multi-node scheduler"""
     
     def __init__(self, resource_manager: ClusterResourceManager):
         self.resource_manager = resource_manager
@@ -189,68 +189,88 @@ class MultiNodeScheduler:
         self.lock = threading.Lock()
     
     def submit_job(self, job: DistributedJob) -> str:
-        """작업 제출"""
+        """Submit job"""
         with self.lock:
             self.job_queue.append(job)
             return job.id
     
     def try_schedule_jobs(self):
-        """작업 스케줄링 시도"""
+        """Try to schedule jobs"""
         with self.lock:
+            if not self.job_queue:
+                return  # No jobs to schedule
+            
+            print(f"[DEBUG] Attempting to schedule {len(self.job_queue)} jobs")
             cluster_resources = self.resource_manager.get_cluster_resources()
+            print(f"[DEBUG] Available cluster resources: {cluster_resources}")
             
             for job in list(self.job_queue):
+                print(f"[DEBUG] Trying to schedule job {job.id} with requirements: {job.node_requirements}")
                 assignment = self.find_node_assignment(job, cluster_resources)
+                
                 if assignment:
+                    print(f"[DEBUG] Found assignment for job {job.id}: {assignment}")
                     self.start_distributed_job(job, assignment)
                     self.job_queue.remove(job)
                     self.running_jobs[job.id] = job
+                    
+                    # Update cluster resources after assignment
+                    for node_id, gpu_ids in assignment.items():
+                        if node_id in cluster_resources:
+                            available_gpus = cluster_resources[node_id]["available_gpus"]
+                            for gpu_id in gpu_ids:
+                                if gpu_id in available_gpus:
+                                    available_gpus.remove(gpu_id)
+                    print(f"[INFO] Successfully scheduled job {job.id}")
+                else:
+                    print(f"[DEBUG] No suitable assignment found for job {job.id}")
+                    break  # Wait for resources to become available
     
     def find_node_assignment(self, job: DistributedJob, cluster_resources: Dict) -> Optional[Dict]:
-        """작업에 적합한 노드 조합 찾기"""
+        """Find suitable node combination for job"""
         requirements = job.node_requirements
         
         if "nodelist" in requirements:
-            # 특정 노드 지정된 경우
+            # When specific nodes are specified
             return self.assign_specific_nodes(job, requirements["nodelist"], cluster_resources)
         elif "nodes" in requirements:
-            # 노드 수만 지정된 경우
+            # When only node count is specified
             return self.assign_best_nodes(job, requirements["nodes"], requirements.get("gpus_per_node", 1), cluster_resources)
         else:
-            # 단일 노드에서 실행
+            # Execute on single node
             return self.assign_single_node(job, cluster_resources)
     
     def assign_specific_nodes(self, job: DistributedJob, nodelist: List[str], cluster_resources: Dict) -> Optional[Dict]:
-        """지정된 노드들에 할당 시도"""
+        """Try to assign to specified nodes"""
         assignment = {}
         required_gpus_per_node = job.node_requirements.get("gpus_per_node", 1)
         
         for node_id in nodelist:
             if node_id not in cluster_resources:
-                return None  # 노드가 오프라인이거나 없음
+                return None  # Node is offline or doesn't exist
             
             available = cluster_resources[node_id]["available_gpus"]
             if len(available) < required_gpus_per_node:
-                return None  # GPU 부족
+                return None  # Insufficient GPUs
             
             assignment[node_id] = available[:required_gpus_per_node]
         
         return assignment
     
     def assign_best_nodes(self, job: DistributedJob, node_count: int, gpus_per_node: int, cluster_resources: Dict) -> Optional[Dict]:
-        """최적의 노드 조합 찾기"""
-        # 사용 가능한 노드들을 GPU 수 기준으로 정렬
+        """Find optimal node combination"""
+        # Sort available nodes by GPU count
         available_nodes = []
         for node_id, resources in cluster_resources.items():
             available_gpus = len(resources["available_gpus"])
             if available_gpus >= gpus_per_node:
                 available_nodes.append((node_id, available_gpus))
         
-        # GPU가 많은 노드부터 우선 선택 (fill-first 정책)
+        # Prioritize nodes with more GPUs (fill-first policy)
         available_nodes.sort(key=lambda x: x[1], reverse=True)
         
         if len(available_nodes) < node_count:
-            return None  # 사용 가능한 노드 부족
+            return None  # Insufficient available nodes
         
         assignment = {}
         for i in range(node_count):
@@ -261,10 +281,10 @@ class MultiNodeScheduler:
         return assignment
     
     def assign_single_node(self, job: DistributedJob, cluster_resources: Dict) -> Optional[Dict]:
-        """단일 노드에 할당"""
+        """Assign to single node"""
         required_gpus = job.total_gpus
         
-        # 클러스터에 노드가 없는 경우 (테스트 환경 등)
+        # For cases when no nodes are available in cluster (test environment, etc.)
         if not cluster_resources:
             print(f"Warning: No nodes available in cluster, creating mock assignment for job {job.id}")
             return {"localhost": list(range(required_gpus))}
@@ -277,38 +297,38 @@ class MultiNodeScheduler:
         return None
     
     def start_distributed_job(self, job: DistributedJob, assignment: Dict):
-        """분산 작업 실행"""
+        """Execute distributed job"""
         job.assigned_nodes = list(assignment.keys())
         job.assigned_gpus = assignment
         job.status = "running"
         
         if len(assignment) == 1:
-            # 단일 노드 실행
+            # Single node execution
             node_id = list(assignment.keys())[0]
             self.start_single_node_job(job, node_id, assignment[node_id])
         else:
-            # 멀티 노드 실행
-            job.master_node = list(assignment.keys())[0]  # 첫 번째 노드를 마스터로
+            # Multi-node execution
+            job.master_node = list(assignment.keys())[0]  # First node becomes master
             self.start_multi_node_job(job, assignment)
     
     def start_single_node_job(self, job: DistributedJob, node_id: str, gpu_ids: List[int]):
-        """단일 노드에서 작업 실행"""
+        """Execute job on single node"""
         try:
-            # localhost 노드인 경우 실제 작업 실행 없이 로그만 출력
+            # For localhost node, only output logs without actual execution
             if node_id == "localhost":
                 print(f"[INFO] Started local job {job.id} on localhost with GPUs {gpu_ids}")
                 print(f"[INFO] Command: {job.cmd}")
-                # 실제 환경에서는 subprocess로 실행하거나 단일 노드 스케줄러로 전달
+                # In actual environment, execute via subprocess or forward to single-node scheduler
                 return
                 
-            # 원격 노드인 경우 네트워크로 전송
+            # For remote nodes, send via network
             node = self.resource_manager.nodes.get(node_id)
             if not node or node.status != "online":
                 print(f"[WARNING] Node {node_id} is not available")
                 job.status = "failed"
                 return
                 
-            # 개별 연결 생성
+            # Create individual connection
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(10.0)
             sock.connect((node.ip, node.port))
@@ -323,7 +343,7 @@ class MultiNodeScheduler:
             }
             sock.send(json.dumps(request).encode())
             
-            # 응답 받기
+            # Receive response
             response_data = sock.recv(4096).decode()
             response = json.loads(response_data)
             
@@ -340,22 +360,22 @@ class MultiNodeScheduler:
             job.status = "failed"
     
     def start_multi_node_job(self, job: DistributedJob, assignment: Dict):
-        """멀티 노드에서 분산 작업 실행"""
-        # 각 노드에 분산 실행 정보 전송
+        """Execute distributed job on multiple nodes"""
+        # Send distributed execution information to each node
         for rank, (node_id, gpu_ids) in enumerate(assignment.items()):
             try:
-                # localhost 노드인 경우
+                # For localhost node
                 if node_id == "localhost":
                     print(f"[INFO] Started distributed job {job.id} rank {rank} on localhost with GPUs {gpu_ids}")
                     continue
                 
-                # 원격 노드인 경우
+                # For remote nodes
                 node = self.resource_manager.nodes.get(node_id)
                 if not node or node.status != "online":
                     print(f"[WARNING] Node {node_id} is not available, skipping rank {rank}")
                     continue
                     
-                # 개별 연결 생성
+                # Create individual connection
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(10.0)
                 sock.connect((node.ip, node.port))
@@ -375,7 +395,7 @@ class MultiNodeScheduler:
                 }
                 sock.send(json.dumps(request).encode())
                 
-                # 응답 받기
+                # Receive response
                 response_data = sock.recv(4096).decode()
                 response = json.loads(response_data)
                 
@@ -393,24 +413,24 @@ class MultiNodeScheduler:
                 break
     
     def cancel_job(self, job_id: str) -> bool:
-        """작업 취소"""
+        """Cancel job"""
         with self.lock:
-            # 큐에서 찾기
+            # Look for job in queue
             for job in list(self.job_queue):
                 if job.id == job_id:
                     self.job_queue.remove(job)
                     print(f"[INFO] Cancelled queued job {job_id}")
                     return True
             
-            # 실행 중인 작업에서 찾기
+            # Look for job in running jobs
             if job_id in self.running_jobs:
                 job = self.running_jobs[job_id]
                 try:
-                    # 각 노드에 취소 요청 전송
+                    # Send cancel request to each node
                     if job.assigned_nodes:
                         for node_id in job.assigned_nodes:
                             if node_id == "localhost":
-                                continue  # localhost는 실제 취소 없이 로그만
+                                continue  # For localhost, only log without actual cancellation
                             
                             node = self.resource_manager.nodes.get(node_id)
                             if node and node.status == "online":
@@ -437,7 +457,7 @@ class MultiNodeScheduler:
                                 except Exception as e:
                                     print(f"[ERROR] Error cancelling job {job_id} on node {node_id}: {e}")
                     
-                    # 실행 중 작업 목록에서 제거
+                    # Remove from running jobs list
                     del self.running_jobs[job_id]
                     job.status = "cancelled"
                     print(f"[INFO] Cancelled running job {job_id}")
@@ -449,6 +469,27 @@ class MultiNodeScheduler:
             
             print(f"[WARNING] Job {job_id} not found")
             return False
+    
+    def flush_all_jobs(self) -> int:
+        """Cancel all queued and running jobs"""
+        with self.lock:
+            cancelled_count = 0
+            
+            # Cancel all queued jobs
+            queued_count = len(self.job_queue)
+            for job in list(self.job_queue):
+                print(f"[INFO] Cancelled queued job {job.id}")
+                cancelled_count += 1
+            self.job_queue.clear()
+            
+            # Cancel all running jobs
+            running_jobs = list(self.running_jobs.values())
+            for job in running_jobs:
+                if self.cancel_job(job.id):
+                    cancelled_count += 1
+            
+            print(f"[INFO] Flushed {cancelled_count} jobs ({queued_count} queued, {len(running_jobs)} running)")
+            return cancelled_count
 
 def main():
     parser = argparse.ArgumentParser()
@@ -456,14 +497,14 @@ def main():
     parser.add_argument('--port', type=int, default=8080, help='Master server port')
     args = parser.parse_args()
     
-    # 리소스 매니저 초기화
+    # Initialize resource manager
     resource_manager = ClusterResourceManager(args.config)
     resource_manager.connect_to_nodes()
     
-    # 스케줄러 초기화
+    # Initialize scheduler
     scheduler = MultiNodeScheduler(resource_manager)
     
-    # 백그라운드 스케줄링 스레드
+    # Background scheduling thread
     def scheduling_loop():
         while True:
             scheduler.try_schedule_jobs()
@@ -471,7 +512,7 @@ def main():
     
     threading.Thread(target=scheduling_loop, daemon=True).start()
     
-    # 클라이언트 요청 처리 서버
+    # Client request handler server
     def handle_client(conn, addr):
         try:
             print(f"[DEBUG] Client connected from {addr}")
@@ -486,7 +527,7 @@ def main():
             print(f"[DEBUG] Request: {request.get('cmd', 'unknown')}")
             
             if request['cmd'] == 'submit':
-                # 분산 작업 제출 처리
+                # Handle distributed job submission
                 job = DistributedJob(
                     id=request['job_id'],
                     user=request['user'],
@@ -503,7 +544,7 @@ def main():
                 print(f"[DEBUG] Job submitted: {job_id}")
             
             elif request['cmd'] == 'queue':
-                # 큐 상태 조회
+                # Query queue status
                 queue_info = {
                     'status': 'ok',
                     'queue': [job.to_dict() for job in scheduler.job_queue],
@@ -514,7 +555,7 @@ def main():
                 print(f"[DEBUG] Queue status sent to {addr}")
             
             elif request['cmd'] == 'cancel':
-                # 작업 취소 처리
+                # Handle job cancellation
                 job_id = request.get('job_id')
                 if job_id:
                     success = scheduler.cancel_job(job_id)
@@ -528,8 +569,15 @@ def main():
                     print(f"[DEBUG] Cancel request failed: No job_id provided")
                 conn.send(json.dumps(response).encode())
             
+            elif request['cmd'] == 'flush':
+                # Flush all jobs
+                cancelled_count = scheduler.flush_all_jobs()
+                response = {'status': 'ok', 'message': f'Flushed {cancelled_count} jobs'}
+                conn.send(json.dumps(response).encode())
+                print(f"[DEBUG] Flush request: cancelled {cancelled_count} jobs")
+            
             elif request['cmd'] == 'heartbeat':
-                # 노드 에이전트로부터의 하트비트 처리
+                # Handle heartbeat from node agents
                 node_id = request.get('node_id')
                 if node_id and node_id in resource_manager.nodes:
                     resource_manager.nodes[node_id].last_heartbeat = time.time()
@@ -554,7 +602,7 @@ def main():
         finally:
             conn.close()
     
-    # 마스터 서버 시작
+    # Start master server
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(('0.0.0.0', args.port))

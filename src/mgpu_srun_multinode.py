@@ -12,14 +12,14 @@ import random
 import string
 
 def generate_job_id():
-    """고유한 작업 ID 생성"""
+    """Generate unique job ID"""
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
 def parse_node_requirements(args):
-    """노드 요구사항 파싱"""
+    """Parse node requirements"""
     requirements = {}
     
-    # 기존 단일 노드 방식
+    # Legacy single node method
     if '--gpu-ids' in args:
         gpu_ids_idx = args.index('--gpu-ids')
         gpu_ids = args[gpu_ids_idx + 1].split(',')
@@ -27,13 +27,13 @@ def parse_node_requirements(args):
         requirements['total_gpus'] = len(gpu_ids)
         return requirements, 'single'
     
-    # 멀티 노드 방식
+    # Multi-node method
     distributed_type = 'single'
     
     if '--nodes' in args:
         nodes_idx = args.index('--nodes')
         requirements['nodes'] = int(args[nodes_idx + 1])
-        distributed_type = 'pytorch'  # 기본값
+        distributed_type = 'pytorch'  # Default value
     
     if '--gpus-per-node' in args:
         gpus_idx = args.index('--gpus-per-node')
@@ -47,13 +47,13 @@ def parse_node_requirements(args):
         exclude_idx = args.index('--exclude')
         requirements['exclude'] = args[exclude_idx + 1].split(',')
     
-    # 분산 실행 타입
+    # Distributed execution type
     if '--mpi' in args:
         distributed_type = 'mpi'
     elif '--distributed' in args or '--pytorch-distributed' in args:
         distributed_type = 'pytorch'
     
-    # 총 GPU 수 계산
+    # Calculate total GPU count
     if 'nodes' in requirements and 'gpus_per_node' in requirements:
         requirements['total_gpus'] = requirements['nodes'] * requirements['gpus_per_node']
         distributed_type = 'pytorch' if distributed_type == 'single' else distributed_type
@@ -65,7 +65,7 @@ def parse_node_requirements(args):
     return requirements, distributed_type
 
 def print_usage():
-    """사용법 출력"""
+    """Print usage information"""
     print("""
 Usage: mgpu_srun [OPTIONS] -- <command>
 
@@ -103,7 +103,7 @@ Examples:
 """)
 
 def main():
-    # 인자 파싱
+    # Parse arguments
     if len(sys.argv) < 2 or '--' not in sys.argv:
         print_usage()
         sys.exit(1)
@@ -123,7 +123,7 @@ def main():
         print_usage()
         sys.exit(1)
     
-    # 노드 요구사항 파싱
+    # Parse node requirements
     try:
         node_requirements, distributed_type = parse_node_requirements(args)
     except Exception as e:
@@ -131,7 +131,7 @@ def main():
         print_usage()
         sys.exit(1)
     
-    # 기타 옵션 파싱
+    # Parse other options
     mem = None
     if '--mem' in args:
         mem_idx = args.index('--mem')
@@ -152,20 +152,20 @@ def main():
         env_idx = args.index('--env-setup-cmd')
         env_setup_cmd = args[env_idx + 1]
     
-    # 기본값: 인터랙티브 모드
+    # Default: interactive mode
     interactive = '--background' not in args
     
-    # 작업 요청 구성
+    # Configure job request
     user = getpass.getuser()
     job_id = generate_job_id()
     
-    # 마스터 서버 연결 (항상 TCP 연결 사용)
+    # Master server connection (always use TCP connection)
     master_host = os.environ.get('MGPU_MASTER_HOST', 'localhost')
     master_port = int(os.environ.get('MGPU_MASTER_PORT', '8080'))
     
     s = None
     try:
-        # 항상 TCP 연결 사용 (단일/멀티 노드 자동 처리)
+        # Always use TCP connection (automatic single/multi-node handling)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((master_host, master_port))
         
@@ -181,7 +181,7 @@ def main():
             'interactive': interactive
         }
         
-        # 옵션 추가
+        # Add options
         if mem is not None:
             req['mem'] = mem
         if time_limit is not None:
@@ -189,7 +189,7 @@ def main():
         if env_setup_cmd is not None:
             req['env_setup_cmd'] = env_setup_cmd
         
-        # 요청 전송
+        # Send request
         s.send(json.dumps(req).encode())
         resp = json.loads(s.recv(4096).decode())
         
@@ -202,7 +202,7 @@ def main():
             if 'gpus_per_node' in node_requirements:
                 print(f"GPUs per node: {node_requirements['gpus_per_node']}")
             
-            # 인터랙티브 모드 처리
+            # Handle interactive mode
             if interactive and resp.get('interactive'):
                 print("Waiting for job to start...")
                 try:
@@ -236,7 +236,7 @@ def main():
                 except KeyboardInterrupt:
                     print("\nUser interrupted. Canceling job...")
                     try:
-                        # 취소 요청 전송 (항상 TCP 연결 사용)
+                        # Send cancel request (always use TCP connection)
                         cancel_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                         cancel_socket.connect((master_host, master_port))
                         

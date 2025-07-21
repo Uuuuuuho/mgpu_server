@@ -4,7 +4,7 @@ import socket
 import json
 
 def main():
-    # 마스터 서버 연결 정보
+    # Master server connection information
     master_host = os.environ.get('MGPU_MASTER_HOST', 'localhost')
     master_port = int(os.environ.get('MGPU_MASTER_PORT', '8080'))
     
@@ -12,7 +12,7 @@ def main():
     req = {'cmd': 'queue'}
     
     try:
-        # TCP 연결 (multi-node master server)
+        # TCP connection (multi-node master server)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((master_host, master_port))
         s.send(json.dumps(req).encode())
@@ -23,7 +23,7 @@ def main():
             running_jobs = resp.get('running', [])
             if running_jobs:
                 for job in running_jobs:
-                    # 멀티노드 작업 정보 출력
+                    # Print multi-node job information
                     job_id = job.get('id', 'N/A')
                     user = job.get('user', 'N/A')
                     cmd = job.get('cmd', job.get('cmdline', 'N/A'))

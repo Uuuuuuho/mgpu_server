@@ -14,7 +14,7 @@ import argparse
 from typing import Dict, List
 
 def get_available_gpus():
-    """로컬 GPU 리소스 조회"""
+    """Query local GPU resources"""
     try:
         out = subprocess.check_output(['nvidia-smi', '--query-gpu=index,memory.free,memory.total', '--format=csv,noheader,nounits'])
         gpus = []
@@ -32,7 +32,7 @@ def get_available_gpus():
         return []
 
 class NodeAgent:
-    """노드 에이전트 - 로컬 리소스 관리 및 작업 실행"""
+    """Node agent - manages local resources and executes jobs"""
     
     def __init__(self, node_id: str, master_host: str, master_port: int, agent_port: int):
         self.node_id = node_id
@@ -40,17 +40,17 @@ class NodeAgent:
         self.master_port = master_port
         self.agent_port = agent_port
         self.running_jobs: Dict[str, subprocess.Popen] = {}
-        self.allocated_gpus: List[int] = []  # 현재 할당된 GPU 목록
+        self.allocated_gpus: List[int] = []  # Currently allocated GPU list
         self.lock = threading.Lock()
         
     def get_node_resources(self) -> Dict:
-        """노드 리소스 정보 반환"""
+        """Return node resource information"""
         gpus = get_available_gpus()
         available_gpu_indices = []
         
         for gpu in gpus:
             if gpu['index'] not in self.allocated_gpus:
-                # GPU 메모리 사용률이 10% 미만이면 사용 가능한 것으로 간주
+                # Consider GPU available if memory utilization is less than 10%
                 if gpu['utilization'] < 10:
                     available_gpu_indices.append(gpu['index'])
         
@@ -66,7 +66,7 @@ class NodeAgent:
         }
     
     def start_job(self, job_info: Dict) -> bool:
-        """단일 노드 작업 실행"""
+        """Execute single node job"""
         job_id = job_info['job_id']
         user = job_info['user']
         command = job_info['command']
@@ -74,19 +74,19 @@ class NodeAgent:
         
         try:
             with self.lock:
-                # GPU 할당
+                # Allocate GPUs
                 for gpu_id in gpu_ids:
                     if gpu_id in self.allocated_gpus:
                         raise Exception(f"GPU {gpu_id} already allocated")
                     self.allocated_gpus.append(gpu_id)
             
-            # CUDA_VISIBLE_DEVICES 설정
+            # Set CUDA_VISIBLE_DEVICES
             cuda_env = f"CUDA_VISIBLE_DEVICES={','.join(map(str, gpu_ids))}"
             home_dir = os.path.expanduser(f'~{user}')
             
             full_command = f"cd {home_dir} && PYTHONUNBUFFERED=1 {cuda_env} {command}"
             
-            # 작업 실행
+            # Execute job
             proc = subprocess.Popen([
                 'sudo', '-u', user, 'bash', '-lc', full_command
             ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
@@ -97,15 +97,15 @@ class NodeAgent:
             
             print(f"[INFO] Started job {job_id} on GPUs {gpu_ids}")
             
-            # 작업 완료 모니터링
+            # Monitor job completion
             def monitor_job():
                 proc.wait()
                 with self.lock:
-                    # GPU 해제
+                    # Release GPUs
                     for gpu_id in gpu_ids:
                         if gpu_id in self.allocated_gpus:
                             self.allocated_gpus.remove(gpu_id)
-                    # 실행 중 작업 목록에서 제거
+                    # Remove from running jobs list
                     if job_id in self.running_jobs:
                         del self.running_jobs[job_id]
                 print(f"[INFO] Job {job_id} completed with exit code {proc.returncode}")
@@ -115,7 +115,7 @@ class NodeAgent:
             
         except Exception as e:
             print(f"[ERROR] Failed to start job {job_id}: {e}")
-            # 할당된 GPU 해제
+            # Release allocated GPUs
             with self.lock:
                 for gpu_id in gpu_ids:
                     if gpu_id in self.allocated_gpus:
@@ -123,7 +123,7 @@ class NodeAgent:
             return False
     
     def start_distributed_job(self, job_info: Dict) -> bool:
-        """분산 작업 실행"""
+        """Execute distributed job"""
         job_id = job_info['job_id']
         user = job_info['user']
         command = job_info['command']
@@ -135,13 +135,13 @@ class NodeAgent:
         
         try:
             with self.lock:
-                # GPU 할당
+                # Allocate GPUs
                 for gpu_id in gpu_ids:
                     if gpu_id in self.allocated_gpus:
                         raise Exception(f"GPU {gpu_id} already allocated")
                     self.allocated_gpus.append(gpu_id)
             
-            # 분산 실행 환경 설정
+            # Setup distributed execution environment
             env_vars = {
                 'CUDA_VISIBLE_DEVICES': ','.join(map(str, gpu_ids)),
                 'PYTHONUNBUFFERED': '1'
@@ -152,19 +152,19 @@ class NodeAgent:
                     'RANK': str(rank),
                     'WORLD_SIZE': str(world_size),
                     'MASTER_ADDR': master_node,
-                    'MASTER_PORT': '29500'  # PyTorch 기본 포트
+                    'MASTER_PORT': '29500'  # PyTorch default port
                 })
             elif distributed_type == 'mpi':
-                # MPI 환경 설정은 mpirun에서 처리
+                # MPI environment setup is handled by mpirun
                 pass
             
-            # 환경 변수 문자열 생성
+            # Generate environment variables string
             env_str = ' '.join([f"{k}={v}" for k, v in env_vars.items()])
             
             home_dir = os.path.expanduser(f'~{user}')
             full_command = f"cd {home_dir} && {env_str} {command}"
             
-            # 분산 작업 실행
+            # Execute distributed job
             proc = subprocess.Popen([
                 'sudo', '-u', user, 'bash', '-lc', full_command
             ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -175,15 +175,15 @@ class NodeAgent:
             
             print(f"[INFO] Started distributed job {job_id} rank {rank} on GPUs {gpu_ids}")
             
-            # 작업 완료 모니터링
+            # Monitor job completion
             def monitor_distributed_job():
                 proc.wait()
                 with self.lock:
-                    # GPU 해제
+                    # Release GPUs
                     for gpu_id in gpu_ids:
                         if gpu_id in self.allocated_gpus:
                             self.allocated_gpus.remove(gpu_id)
-                    # 실행 중 작업 목록에서 제거
+                    # Remove from running jobs list
                     if job_id in self.running_jobs:
                         del self.running_jobs[job_id]
                 print(f"[INFO] Distributed job {job_id} rank {rank} completed with exit code {proc.returncode}")
@@ -193,7 +193,7 @@ class NodeAgent:
             
         except Exception as e:
             print(f"[ERROR] Failed to start distributed job {job_id}: {e}")
-            # 할당된 GPU 해제
+            # Release allocated GPUs
             with self.lock:
                 for gpu_id in gpu_ids:
                     if gpu_id in self.allocated_gpus:
@@ -201,12 +201,12 @@ class NodeAgent:
             return False
     
     def cancel_job(self, job_id: str) -> bool:
-        """작업 취소"""
+        """Cancel job"""
         with self.lock:
             if job_id in self.running_jobs:
                 proc = self.running_jobs[job_id]
                 try:
-                    # 프로세스 트리 전체 종료
+                    # Terminate entire process tree
                     parent = psutil.Process(proc.pid)
                     children = parent.children(recursive=True)
                     for child in children:
@@ -226,11 +226,11 @@ class NodeAgent:
                 return False
     
     def handle_request(self, conn, addr):
-        """마스터 서버로부터의 요청 처리"""
+        """Handle requests from master server"""
         print(f"[DEBUG] Received connection from {addr}")
         
         try:
-            # 소켓 타임아웃 설정
+            # Set socket timeout
             conn.settimeout(10.0)
             
             data = conn.recv(4096)
@@ -240,7 +240,7 @@ class NodeAgent:
                 print(f"[WARNING] Empty data received from {addr}")
                 return
             
-            print(f"[DEBUG] Raw data: {data[:200]}...")  # 처음 200바이트만 출력
+            print(f"[DEBUG] Raw data: {data[:200]}...")  # Print only first 200 bytes
             
             try:
                 request = json.loads(data.decode())
@@ -282,11 +282,11 @@ class NodeAgent:
                 response = {'status': 'ok', 'timestamp': time.time()}
             
             elif cmd == 'heartbeat':
-                # 하트비트는 단순히 OK 응답만 보냄
+                # Heartbeat only sends OK response
                 response = {'status': 'ok', 'message': 'heartbeat received'}
                 print(f"[DEBUG] Heartbeat received from {addr}")
             
-            # 응답 전송
+            # Send response
             response_data = json.dumps(response).encode()
             print(f"[DEBUG] Sending response: {len(response_data)} bytes")
             conn.send(response_data)
@@ -312,7 +312,7 @@ class NodeAgent:
                 pass
     
     def start_agent_server(self):
-        """에이전트 서버 시작"""
+        """Start agent server"""
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(('0.0.0.0', self.agent_port))
@@ -325,11 +325,11 @@ class NodeAgent:
             threading.Thread(target=self.handle_request, args=(conn, addr), daemon=True).start()
     
     def send_heartbeat(self):
-        """마스터 서버에 하트비트 전송"""
+        """Send heartbeat to master server"""
         while True:
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5.0)  # 5초 타임아웃
+                sock.settimeout(5.0)  # 5 second timeout
                 
                 print(f"[DEBUG] Attempting heartbeat to {self.master_host}:{self.master_port}")
                 sock.connect((self.master_host, self.master_port))
@@ -344,7 +344,7 @@ class NodeAgent:
                 heartbeat_data = json.dumps(heartbeat).encode()
                 sock.send(heartbeat_data)
                 
-                # 응답 받기
+                # Receive response
                 response_data = sock.recv(4096)
                 if response_data:
                     response = json.loads(response_data.decode())
@@ -364,7 +364,7 @@ class NodeAgent:
             except Exception as e:
                 print(f"[WARNING] Failed to send heartbeat: {e}")
             
-            time.sleep(30)  # 30초마다 하트비트
+            time.sleep(30)  # Heartbeat every 30 seconds
 
 def main():
     parser = argparse.ArgumentParser()
@@ -376,10 +376,10 @@ def main():
     
     agent = NodeAgent(args.node_id, args.master_host, args.master_port, args.agent_port)
     
-    # 하트비트 스레드 시작
+    # Start heartbeat thread
     threading.Thread(target=agent.send_heartbeat, daemon=True).start()
     
-    # 에이전트 서버 시작
+    # Start agent server
     agent.start_agent_server()
 
 if __name__ == "__main__":

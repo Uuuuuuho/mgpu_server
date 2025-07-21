@@ -12,14 +12,14 @@ def main():
     
     job_id = sys.argv[1]
     
-    # 마스터 서버 연결 정보
+    # Master server connection information
     master_host = os.environ.get('MGPU_MASTER_HOST', 'localhost')
     master_port = int(os.environ.get('MGPU_MASTER_PORT', '8080'))
     
     req = {'cmd': 'cancel', 'job_id': job_id}
     
     try:
-        # TCP 연결 (multi-node master server)
+        # TCP connection (multi-node master server)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((master_host, master_port))
         s.send(json.dumps(req).encode())
