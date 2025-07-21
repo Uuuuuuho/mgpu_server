@@ -45,9 +45,14 @@ class DistributedJob:
     priority: int = 0
     distributed_type: str = "single"  # single, mpi, pytorch, custom
     master_node: Optional[str] = None
+    interactive: bool = False
+    client_conn: Optional[socket.socket] = None
     
     def to_dict(self):
-        return asdict(self)
+        result = asdict(self)
+        # Remove non-serializable socket object
+        result.pop('client_conn', None)
+        return result
 
 class ClusterResourceManager:
     """Cluster resource management"""
@@ -259,15 +264,17 @@ class MultiNodeScheduler:
     
     def assign_best_nodes(self, job: DistributedJob, node_count: int, gpus_per_node: int, cluster_resources: Dict) -> Optional[Dict]:
         """Find optimal node combination"""
-        # Sort available nodes by GPU count
+        # Sort available nodes by GPU count, prioritizing online nodes
         available_nodes = []
         for node_id, resources in cluster_resources.items():
             available_gpus = len(resources["available_gpus"])
             if available_gpus >= gpus_per_node:
-                available_nodes.append((node_id, available_gpus))
+                # Prioritize online nodes by giving them higher priority
+                priority = 1000 if resources.get("status") != "offline" else 0
+                available_nodes.append((node_id, available_gpus, priority))
         
-        # Prioritize nodes with more GPUs (fill-first policy)
-        available_nodes.sort(key=lambda x: x[1], reverse=True)
+        # Sort by priority first (online vs offline), then by GPU count (fill-first policy)
+        available_nodes.sort(key=lambda x: (x[2], x[1]), reverse=True)
         
         if len(available_nodes) < node_count:
             return None  # Insufficient available nodes
@@ -289,10 +296,25 @@ class MultiNodeScheduler:
             print(f"Warning: No nodes available in cluster, creating mock assignment for job {job.id}")
             return {"localhost": list(range(required_gpus))}
         
+        # Prioritize online nodes first, then offline nodes
+        online_nodes = []
+        offline_nodes = []
+        
         for node_id, resources in cluster_resources.items():
             available = resources["available_gpus"]
             if len(available) >= required_gpus:
-                return {node_id: available[:required_gpus]}
+                if resources.get("status") == "offline":
+                    offline_nodes.append((node_id, available))
+                else:
+                    online_nodes.append((node_id, available))
+        
+        # Try online nodes first
+        for node_id, available in online_nodes:
+            return {node_id: available[:required_gpus]}
+        
+        # If no online nodes available, try offline nodes (but this shouldn't happen for localhost)
+        for node_id, available in offline_nodes:
+            return {node_id: available[:required_gpus]}
         
         return None
     
@@ -314,11 +336,79 @@ class MultiNodeScheduler:
     def start_single_node_job(self, job: DistributedJob, node_id: str, gpu_ids: List[int]):
         """Execute job on single node"""
         try:
-            # For localhost node, only output logs without actual execution
+            # For localhost node, execute directly on local GPUs
             if node_id == "localhost":
-                print(f"[INFO] Started local job {job.id} on localhost with GPUs {gpu_ids}")
+                print(f"[INFO] Starting local job {job.id} on localhost with GPUs {gpu_ids}")
                 print(f"[INFO] Command: {job.cmd}")
-                # In actual environment, execute via subprocess or forward to single-node scheduler
+                
+                # Set CUDA_VISIBLE_DEVICES for GPU assignment
+                cuda_env = f"CUDA_VISIBLE_DEVICES={','.join(map(str, gpu_ids))}"
+                home_dir = os.path.expanduser(f'~{job.user}')
+                
+                # Use the user's shell with proper environment
+                full_command = f"cd {home_dir} && export {cuda_env} && export PYTHONUNBUFFERED=1 && {job.cmd}"
+                
+                # Execute job locally
+                def execute_local_job():
+                    try:
+                        proc = subprocess.Popen([
+                            'sudo', '-u', job.user, 'bash', '-lc', full_command
+                        ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                        universal_newlines=True, preexec_fn=os.setsid)
+                        
+                        print(f"[INFO] Started local job {job.id} with PID {proc.pid}")
+                        
+                        # Handle interactive output streaming
+                        if job.interactive and job.client_conn and proc.stdout:
+                            try:
+                                # Stream output to client
+                                while True:
+                                    output = proc.stdout.readline()
+                                    if output == '' and proc.poll() is not None:
+                                        break
+                                    if output:
+                                        output_msg = {
+                                            'type': 'output',
+                                            'data': output
+                                        }
+                                        try:
+                                            job.client_conn.send((json.dumps(output_msg) + '\n').encode())
+                                        except (BrokenPipeError, ConnectionResetError):
+                                            print(f"[INFO] Client disconnected from job {job.id}")
+                                            break
+                                
+                                # Wait for completion and send completion message
+                                proc.wait()
+                                completion_msg = {
+                                    'type': 'completion',
+                                    'job_id': job.id,
+                                    'exit_code': proc.returncode
+                                }
+                                try:
+                                    job.client_conn.send((json.dumps(completion_msg) + '\n').encode())
+                                    job.client_conn.close()
+                                except (BrokenPipeError, ConnectionResetError):
+                                    pass
+                                    
+                            except Exception as e:
+                                print(f"[ERROR] Error streaming output for job {job.id}: {e}")
+                        else:
+                            # Non-interactive mode, just wait for completion
+                            proc.wait()
+                        
+                        print(f"[INFO] Local job {job.id} completed with exit code {proc.returncode}")
+                        
+                        # Remove from running jobs
+                        with self.lock:
+                            if job.id in self.running_jobs:
+                                del self.running_jobs[job.id]
+                                
+                    except Exception as e:
+                        print(f"[ERROR] Error executing local job {job.id}: {e}")
+                        job.status = "failed"
+                
+                # Start job in background thread
+                threading.Thread(target=execute_local_job, daemon=True).start()
                 return
                 
             # For remote nodes, send via network
@@ -514,6 +604,7 @@ def main():
     
     # Client request handler server
     def handle_client(conn, addr):
+        close_connection = True  # Default behavior
         try:
             print(f"[DEBUG] Client connected from {addr}")
             data = conn.recv(4096)
@@ -528,6 +619,8 @@ def main():
             
             if request['cmd'] == 'submit':
                 # Handle distributed job submission
+                interactive = request.get('interactive', False)
+                
                 job = DistributedJob(
                     id=request['job_id'],
                     user=request['user'],
@@ -535,13 +628,25 @@ def main():
                     node_requirements=request.get('node_requirements', {}),
                     total_gpus=request.get('total_gpus', 1),
                     priority=request.get('priority', 0),
-                    distributed_type=request.get('distributed_type', 'single')
+                    distributed_type=request.get('distributed_type', 'single'),
+                    interactive=interactive,
+                    client_conn=conn if interactive else None
                 )
                 
                 job_id = scheduler.submit_job(job)
-                response = {'status': 'ok', 'job_id': job_id}
-                conn.send(json.dumps(response).encode())
-                print(f"[DEBUG] Job submitted: {job_id}")
+                
+                if interactive:
+                    # For interactive jobs, send initial response but keep connection open
+                    response = {'status': 'ok', 'job_id': job_id, 'interactive': True}
+                    conn.send(json.dumps(response).encode())
+                    print(f"[DEBUG] Interactive job submitted: {job_id}")
+                    close_connection = False  # Don't close connection for interactive jobs
+                    return  # Don't close connection
+                else:
+                    # For non-interactive jobs, send response and close connection
+                    response = {'status': 'ok', 'job_id': job_id}
+                    conn.send(json.dumps(response).encode())
+                    print(f"[DEBUG] Job submitted: {job_id}")
             
             elif request['cmd'] == 'queue':
                 # Query queue status
@@ -600,7 +705,8 @@ def main():
             error_response = {'status': 'error', 'message': str(e)}
             conn.send(json.dumps(error_response).encode())
         finally:
-            conn.close()
+            if close_connection:
+                conn.close()
     
     # Start master server
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
