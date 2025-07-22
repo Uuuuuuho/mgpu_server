@@ -14,22 +14,22 @@ import psutil
 import select
 
 SOCKET_PATH = '/tmp/mgpu_scheduler.sock'
-MAX_JOB_TIME = 600  # 최대 점유시간(초), 필요시 main에서 인자로 받을 수 있음
+MAX_JOB_TIME = 600  # Maximum occupation time (seconds), can be passed as argument in main if needed
 
 class Job:
     def __init__(self, user, gpus, mem, cmd, time_limit=None, priority=0, gpu_ids=None, env_setup_cmd=None, client_socket=None):
         self.id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         self.user = user
         self.gpus = gpus
-        self.mem = mem  # None이면 서버에서 자동 할당
+        self.mem = mem  # If None, server will auto-allocate
         self.cmd = cmd
         self.status = 'queued'
         self.proc = None
-        self.start_time = None  # 실행 시작 시간
-        self.time_limit = time_limit  # 유저별 시간 제한(초)
+        self.start_time = None  # Job execution start time
+        self.time_limit = time_limit  # Per-user time limit (seconds)
         self.priority = priority
-        self.gpu_ids = gpu_ids  # 사용자가 요청한 특정 GPU ID
-        self.env_setup_cmd = env_setup_cmd  # 사용자가 요청한 환경설정 명령어
+        self.gpu_ids = gpu_ids  # User-requested specific GPU IDs
+        self.env_setup_cmd = env_setup_cmd  # User-requested environment setup command
         self.client_socket = client_socket  # Socket to stream output back to user
 
     def to_dict(self):

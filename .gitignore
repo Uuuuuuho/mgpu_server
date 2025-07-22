@@ -16,9 +16,9 @@ dist/
 .DS_Store
 Thumbs.db
 
-# 기타
+# Other
 *.log
 .venv/
 
-# 소켓 파일
+# Socket files
 /tmp/mgpu_scheduler.sock
