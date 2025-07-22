@@ -18,6 +18,7 @@ Thumbs.db
 
 # 기타
 *.log
+.venv/
 
 # 소켓 파일
 /tmp/mgpu_scheduler.sock
