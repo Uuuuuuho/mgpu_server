@@ -13,7 +13,7 @@ nodes:
   - node_id: "node001"          # 노드 고유 ID
     hostname: "localhost"       # 노드 호스트명
     ip: "127.0.0.1"            # 노드 IP 주소
-    port: 8081                  # 노드 에이전트 포트
+    port: 8081                  # 노드 에이전트 포트 (corrected to match running agent)
     gpu_count: 1                # 이 노드의 GPU 개수
     gpu_type: "RTX 3060"        # GPU 타입 (참고용)
 

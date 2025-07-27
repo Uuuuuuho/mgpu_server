@@ -50,8 +50,12 @@ class DistributedJob:
     
     def to_dict(self):
         result = asdict(self)
-        # Remove non-serializable socket object
+        # Remove non-serializable socket object and other problematic fields
         result.pop('client_conn', None)
+        # Ensure all values are JSON serializable
+        for key, value in result.items():
+            if hasattr(value, '__dict__') and not isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                result[key] = str(value)
         return result
 
 class ClusterResourceManager:
@@ -91,18 +95,18 @@ class ClusterResourceManager:
         
         if available_count == 0:
             print(f"[WARNING] No nodes available. Master server will run in standalone mode.")
-            # Create localhost node for standalone mode
+            # Create localhost node for standalone mode with multiple virtual GPUs
             localhost_node = Node(
                 node_id="localhost",
                 hostname="localhost", 
                 ip="127.0.0.1",
                 port=0,  # No actual connection
-                gpu_count=1,
+                gpu_count=4,  # Increased to 4 GPUs for testing
                 gpu_type="virtual"
             )
             localhost_node.status = "online"
             self.nodes["localhost"] = localhost_node
-            print(f"[INFO] Created virtual localhost node for standalone mode")
+            print(f"[INFO] Created virtual localhost node with {localhost_node.gpu_count} GPUs for standalone mode")
         else:
             print(f"[INFO] Found {available_count}/{len(self.nodes)} available nodes")
     
@@ -192,12 +196,28 @@ class MultiNodeScheduler:
         self.job_queue = deque()
         self.running_jobs: Dict[str, DistributedJob] = {}
         self.lock = threading.Lock()
+        self.interactive_clients = {}  # job_id -> list of client sockets
     
     def submit_job(self, job: DistributedJob) -> str:
         """Submit job"""
         with self.lock:
             self.job_queue.append(job)
             return job.id
+    
+    def get_queue_status(self) -> Dict:
+        """Get queue status without blocking - thread-safe snapshot"""
+        # Take a quick snapshot to avoid blocking
+        with self.lock:
+            queued_jobs = [job.to_dict() for job in list(self.job_queue)]
+            running_jobs = [job.to_dict() for job in list(self.running_jobs.values())]
+            node_status = {node_id: node.status for node_id, node in self.resource_manager.nodes.items()}
+        
+        return {
+            'status': 'ok',
+            'queue': queued_jobs,
+            'running': running_jobs,
+            'nodes': node_status
+        }
     
     def try_schedule_jobs(self):
         """Try to schedule jobs"""
@@ -234,7 +254,31 @@ class MultiNodeScheduler:
     def find_node_assignment(self, job: DistributedJob, cluster_resources: Dict) -> Optional[Dict]:
         """Find suitable node combination for job"""
         requirements = job.node_requirements
-        
+        # If user specified exact GPUs per node, honor that mapping
+        if 'node_gpu_ids' in requirements:
+            mapping = requirements['node_gpu_ids']
+            print(f"[DEBUG] Processing node_gpu_ids mapping: {mapping}")
+            
+            # Verify nodes and GPU availability
+            for node_id, gpu_ids in mapping.items():
+                print(f"[DEBUG] Checking node {node_id} with requested GPUs {gpu_ids}")
+                
+                if node_id not in cluster_resources:
+                    print(f"[ERROR] Node {node_id} not found in cluster resources. Available nodes: {list(cluster_resources.keys())}")
+                    return None
+                
+                available = cluster_resources[node_id]['available_gpus']
+                print(f"[DEBUG] Available GPUs on {node_id}: {available}")
+                
+                for g in gpu_ids:
+                    if g not in available:
+                        print(f"[ERROR] GPU {g} not available on node {node_id}. Available GPUs: {available}")
+                        return None
+                
+                print(f"[DEBUG] Node {node_id} has all requested GPUs available")
+            
+            print(f"[INFO] All nodes and GPUs are available for job {job.id}, returning mapping: {mapping}")
+            return mapping
         if "nodelist" in requirements:
             # When specific nodes are specified
             return self.assign_specific_nodes(job, requirements["nodelist"], cluster_resources)
@@ -636,7 +680,12 @@ def main():
                 job_id = scheduler.submit_job(job)
                 
                 if interactive:
-                    # For interactive jobs, send initial response but keep connection open
+                    # For interactive jobs, add client to interactive clients list
+                    if job_id not in scheduler.interactive_clients:
+                        scheduler.interactive_clients[job_id] = []
+                    scheduler.interactive_clients[job_id].append(conn)
+                    
+                    # Send initial response but keep connection open
                     response = {'status': 'ok', 'job_id': job_id, 'interactive': True}
                     conn.send(json.dumps(response).encode())
                     print(f"[DEBUG] Interactive job submitted: {job_id}")
@@ -649,13 +698,8 @@ def main():
                     print(f"[DEBUG] Job submitted: {job_id}")
             
             elif request['cmd'] == 'queue':
-                # Query queue status
-                queue_info = {
-                    'status': 'ok',
-                    'queue': [job.to_dict() for job in scheduler.job_queue],
-                    'running': [job.to_dict() for job in scheduler.running_jobs.values()],
-                    'nodes': {node_id: node.status for node_id, node in resource_manager.nodes.items()}
-                }
+                # Query queue status using thread-safe method
+                queue_info = scheduler.get_queue_status()
                 conn.send(json.dumps(queue_info).encode())
                 print(f"[DEBUG] Queue status sent to {addr}")
             
@@ -693,6 +737,85 @@ def main():
                 
                 response = {'status': 'ok', 'message': 'heartbeat acknowledged'}
                 conn.send(json.dumps(response).encode())
+            
+            elif request['cmd'] == 'interactive_output':
+                # Handle interactive output from node
+                job_id = request.get('job_id')
+                data = request.get('data', '')
+                
+                if job_id in scheduler.interactive_clients:
+                    # Send output to all connected interactive clients
+                    dead_clients = []
+                    for client_socket in scheduler.interactive_clients[job_id]:
+                        try:
+                            output_msg = {
+                                'type': 'output',
+                                'job_id': job_id,
+                                'data': data
+                            }
+                            client_socket.send((json.dumps(output_msg) + '\n').encode())
+                        except:
+                            dead_clients.append(client_socket)
+                    
+                    # Remove dead clients
+                    for client in dead_clients:
+                        scheduler.interactive_clients[job_id].remove(client)
+                
+                response = {'status': 'ok', 'message': 'Output forwarded'}
+                conn.send(json.dumps(response).encode())
+            
+            elif request['cmd'] == 'interactive_complete':
+                # Handle interactive job completion
+                job_id = request.get('job_id')
+                exit_code = request.get('exit_code', 0)
+                
+                # Send completion to interactive clients
+                if job_id in scheduler.interactive_clients:
+                    dead_clients = []
+                    for client_socket in scheduler.interactive_clients[job_id]:
+                        try:
+                            completion_msg = {
+                                'type': 'completion',
+                                'job_id': job_id,
+                                'exit_code': exit_code
+                            }
+                            client_socket.send((json.dumps(completion_msg) + '\n').encode())
+                        except:
+                            dead_clients.append(client_socket)
+                    
+                    # Clean up client list
+                    for client in dead_clients:
+                        try:
+                            client.close()
+                        except:
+                            pass
+                    
+                    del scheduler.interactive_clients[job_id]
+                
+                response = {'status': 'ok', 'message': 'Interactive completion processed'}
+                conn.send(json.dumps(response).encode())
+            
+            elif request['cmd'] == 'get_cluster_resources':
+                # Get cluster-wide resource information
+                try:
+                    cluster_resources = resource_manager.get_cluster_resources()
+                    response = {
+                        'status': 'ok', 
+                        'resources': cluster_resources,
+                        'nodes': {node_id: {
+                            'hostname': node.hostname,
+                            'status': node.status,
+                            'gpu_count': node.gpu_count,
+                            'gpu_type': node.gpu_type,
+                            'last_heartbeat': node.last_heartbeat
+                        } for node_id, node in resource_manager.nodes.items()}
+                    }
+                    conn.send(json.dumps(response).encode())
+                    print(f"[DEBUG] Cluster resources sent to {addr}")
+                except Exception as e:
+                    response = {'status': 'error', 'message': f'Failed to get cluster resources: {str(e)}'}
+                    conn.send(json.dumps(response).encode())
+                    print(f"[ERROR] Failed to get cluster resources: {e}")
             
         except json.JSONDecodeError as e:
             print(f"[ERROR] JSON decode error from {addr}: {e}")

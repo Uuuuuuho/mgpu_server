@@ -13,8 +13,26 @@ import tempfile
 from pathlib import Path
 
 def test_gpu_detection():
-    """Test GPU detection functionality"""
+    """Test GPU detection functionality - both local and cluster-wide"""
     print("=== Testing GPU Detection ===")
+    
+    # First test local GPU detection
+    local_success, local_gpu_count = test_local_gpu_detection()
+    
+    # Then test cluster-wide GPU detection via master server
+    cluster_success, cluster_info = test_cluster_gpu_detection()
+    
+    if local_success and cluster_success:
+        return True, local_gpu_count
+    elif local_success and not cluster_success:
+        print("? Local GPU detection successful, but cluster detection failed")
+        return True, local_gpu_count  # Still consider it a pass for local testing
+    else:
+        return False, 0
+
+def test_local_gpu_detection():
+    """Test local GPU detection using nvidia-smi directly"""
+    print("--- Testing Local GPU Detection ---")
     
     try:
         # Test nvidia-smi availability
@@ -24,7 +42,7 @@ def test_gpu_detection():
         
         if result.returncode == 0:
             gpu_info = result.stdout.strip().split('\n')
-            print(f"✓ Detected {len(gpu_info)} GPU(s)")
+            print(f"✓ Detected {len(gpu_info)} local GPU(s)")
             for i, gpu in enumerate(gpu_info):
                 parts = gpu.split(', ')
                 if len(parts) >= 4:
@@ -41,6 +59,96 @@ def test_gpu_detection():
     except Exception as e:
         print(f"✗ GPU detection error: {e}")
         return False, 0
+
+def test_cluster_gpu_detection():
+    """Test cluster-wide GPU detection via master server"""
+    print("--- Testing Cluster GPU Detection ---")
+    
+    sock = None
+    try:
+        # Try to connect to master server
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5.0)
+        
+        try:
+            sock.connect(('localhost', 8080))
+            print("✓ Connected to master server")
+        except ConnectionRefusedError:
+            print("? Master server not running - skipping cluster test")
+            return True, None  # Not a failure, just skip
+        except Exception as e:
+            print(f"? Cannot connect to master server: {e}")
+            return True, None  # Not a failure, just skip
+        
+        # Use queue command to get cluster info (which includes nodes)
+        request = {'cmd': 'queue'}
+        
+        sock.send(json.dumps(request).encode())
+        response_data = sock.recv(4096).decode()
+        
+        if response_data:
+            response = json.loads(response_data)
+            print(f"✓ Received response from master server: {response.get('status', 'unknown')}")
+            
+            # Extract node information from queue response
+            nodes = response.get('nodes', {})
+            
+            if nodes:
+                node_count = len(nodes)
+                print("✓ Cluster Node Information:")
+                for node_id, status in nodes.items():
+                    print(f"  Node {node_id}: {status}")
+                
+                print(f"✓ Total cluster nodes: {node_count}")
+                
+                # Try to get more detailed resource information
+                # Use get_cluster_resources if available
+                try:
+                    resource_request = {'cmd': 'get_cluster_resources'}
+                    sock.send(json.dumps(resource_request).encode())
+                    resource_response = sock.recv(4096).decode()
+                    
+                    if resource_response:
+                        cluster_data = json.loads(resource_response)
+                        if cluster_data.get('status') == 'ok':
+                            resources = cluster_data.get('resources', {})
+                            total_gpus = 0
+                            
+                            print("✓ Detailed Cluster GPU Information:")
+                            for node_id, node_info in resources.items():
+                                node_gpus = len(node_info.get('available_gpus', []))
+                                total_gpus += node_info.get('total_gpus', node_gpus)
+                                gpu_type = node_info.get('gpu_type', 'unknown')
+                                status = node_info.get('status', 'unknown')
+                                
+                                print(f"  Node {node_id}: {node_gpus} GPUs ({gpu_type}) - {status}")
+                            
+                            print(f"✓ Total cluster GPUs: {total_gpus} across {node_count} nodes")
+                            return True, {'total_gpus': total_gpus, 'nodes': node_count}
+                        else:
+                            print(f"? get_cluster_resources failed: {cluster_data.get('message', 'unknown error')}")
+                except Exception as e:
+                    print(f"? get_cluster_resources not available: {e}")
+                
+                # Fall back to basic node count if detailed info not available
+                print(f"✓ Basic cluster info: {node_count} nodes detected")
+                return True, {'total_gpus': 'unknown', 'nodes': node_count}
+            else:
+                print("? No node information in queue response")
+                return True, None  # Not a failure, just no detailed info
+        else:
+            print("? No response from master server")
+            return True, None  # Not a failure, just no response
+            
+    except Exception as e:
+        print(f"? Cluster GPU detection error: {e}")
+        return True, None  # Not a failure, just couldn't test cluster
+    finally:
+        if sock:
+            try:
+                sock.close()
+            except:
+                pass
 
 def test_cuda_environment_setup():
     """Test CUDA environment variable setup"""

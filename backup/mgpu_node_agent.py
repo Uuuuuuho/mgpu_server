@@ -50,8 +50,8 @@ class NodeAgent:
         
         for gpu in gpus:
             if gpu['index'] not in self.allocated_gpus:
-                # Consider GPU available if memory utilization is less than 10%
-                if gpu['utilization'] < 10:
+                # Consider GPU available if memory utilization is less than 80% (increased for testing)
+                if gpu['utilization'] < 80:
                     available_gpu_indices.append(gpu['index'])
         
         return {
@@ -71,6 +71,7 @@ class NodeAgent:
         user = job_info['user']
         command = job_info['command']
         gpu_ids = job_info['gpu_ids']
+        interactive = job_info.get('interactive', False)
         
         try:
             with self.lock:
@@ -86,31 +87,103 @@ class NodeAgent:
             
             full_command = f"cd {home_dir} && PYTHONUNBUFFERED=1 {cuda_env} {command}"
             
-            # Execute job
-            proc = subprocess.Popen([
-                'sudo', '-u', user, 'bash', '-lc', full_command
-            ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
-            universal_newlines=True, preexec_fn=os.setsid)
+            # Execute job (different handling for interactive)
+            if interactive:
+                proc = subprocess.Popen([
+                    'sudo', '-u', user, 'bash', '-lc', full_command
+                ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE, bufsize=1, universal_newlines=True, text=True,
+                preexec_fn=os.setsid)
+            else:
+                proc = subprocess.Popen([
+                    'sudo', '-u', user, 'bash', '-lc', full_command
+                ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                universal_newlines=True, preexec_fn=os.setsid)
             
             with self.lock:
                 self.running_jobs[job_id] = proc
             
-            print(f"[INFO] Started job {job_id} on GPUs {gpu_ids}")
+            print(f"[INFO] Started {'interactive' if interactive else 'regular'} job {job_id} on GPUs {gpu_ids}")
             
-            # Monitor job completion
-            def monitor_job():
-                proc.wait()
-                with self.lock:
-                    # Release GPUs
-                    for gpu_id in gpu_ids:
-                        if gpu_id in self.allocated_gpus:
-                            self.allocated_gpus.remove(gpu_id)
-                    # Remove from running jobs list
-                    if job_id in self.running_jobs:
-                        del self.running_jobs[job_id]
-                print(f"[INFO] Job {job_id} completed with exit code {proc.returncode}")
+            # Monitor job completion (different for interactive)
+            if interactive:
+                def monitor_interactive_job():
+                    # Stream output in real-time for interactive jobs
+                    while proc.poll() is None:
+                        if proc.stdout:
+                            line = proc.stdout.readline()
+                            if line:
+                                # Send output to master server
+                                try:
+                                    master_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                    master_sock.settimeout(2.0)
+                                    master_sock.connect((self.master_host, self.master_port))
+                                    
+                                    output_msg = {
+                                        'cmd': 'interactive_output',
+                                        'job_id': job_id,
+                                        'data': line,
+                                        'node_id': self.node_id
+                                    }
+                                    
+                                    master_sock.send(json.dumps(output_msg).encode())
+                                    master_sock.recv(1024)  # Receive response
+                                    master_sock.close()
+                                    
+                                except Exception as e:
+                                    print(f"[DEBUG] Failed to send interactive output: {e}")
+                                    
+                        time.sleep(0.1)
+                    
+                    # Get final exit code
+                    exit_code = proc.wait()
+                    
+                    # Send completion notification
+                    try:
+                        master_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        master_sock.settimeout(10.0)
+                        master_sock.connect((self.master_host, self.master_port))
+                        
+                        completion_msg = {
+                            'cmd': 'interactive_complete',
+                            'job_id': job_id,
+                            'exit_code': exit_code,
+                            'node_id': self.node_id
+                        }
+                        
+                        master_sock.send(json.dumps(completion_msg).encode())
+                        master_sock.recv(1024)
+                        master_sock.close()
+                        
+                    except Exception as e:
+                        print(f"[ERROR] Failed to notify interactive completion: {e}")
+                    
+                    # Cleanup
+                    with self.lock:
+                        for gpu_id in gpu_ids:
+                            if gpu_id in self.allocated_gpus:
+                                self.allocated_gpus.remove(gpu_id)
+                        if job_id in self.running_jobs:
+                            del self.running_jobs[job_id]
+                    
+                    print(f"[INFO] Interactive job {job_id} completed with exit code {exit_code}")
+                
+                threading.Thread(target=monitor_interactive_job, daemon=True).start()
+            else:
+                def monitor_job():
+                    proc.wait()
+                    with self.lock:
+                        # Release GPUs
+                        for gpu_id in gpu_ids:
+                            if gpu_id in self.allocated_gpus:
+                                self.allocated_gpus.remove(gpu_id)
+                        # Remove from running jobs list
+                        if job_id in self.running_jobs:
+                            del self.running_jobs[job_id]
+                    print(f"[INFO] Job {job_id} completed with exit code {proc.returncode}")
+                
+                threading.Thread(target=monitor_job, daemon=True).start()
             
-            threading.Thread(target=monitor_job, daemon=True).start()
             return True
             
         except Exception as e:

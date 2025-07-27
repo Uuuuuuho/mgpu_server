@@ -55,23 +55,24 @@ class SimpleModel(nn.Module):
         return self.linear(x)
 
 def test_distributed_training():
-    """분산 훈련 테스트"""
+    """Distributed training test"""
+    rank = -1  # Default value in case setup_distributed fails
     try:
         rank, world_size, device = setup_distributed()
         
-        # 모델 생성 및 DDP 래핑
+        # Create model and wrap with DDP
         model = SimpleModel().to(device)
         model = DDP(model, device_ids=[device.index])
         
-        # 옵티마이저 설정
+        # Set up optimizer
         optimizer = optim.SGD(model.parameters(), lr=0.01)
         criterion = nn.MSELoss()
         
-        print(f"[Node {rank}] Starting distributed training simulation...")
+        print(f"[Node {rank}] Starting distributed training test...")
         
-        # 훈련 루프 시뮬레이션
+        # Simulate training loop
         for epoch in range(5):
-            # 더미 데이터 생성
+            # Generate dummy data
             data = torch.randn(32, 10).to(device)
             target = torch.randn(32, 1).to(device)
             
@@ -84,18 +85,18 @@ def test_distributed_training():
             loss.backward()
             optimizer.step()
             
-            # 모든 노드에서 loss 수집 (테스트용)
+            # Collect loss from all nodes (for testing)
             dist.all_reduce(loss, op=dist.ReduceOp.SUM)
             avg_loss = loss.item() / world_size
             
-            if rank == 0:  # 마스터 노드에서만 출력
+            if rank == 0:  # Print only on master node
                 print(f"Epoch {epoch+1}/5, Average Loss: {avg_loss:.4f}")
             
-            time.sleep(1)  # 진행 상황을 보기 위한 딜레이
+            time.sleep(1)  # Delay for progress visibility
         
         print(f"[Node {rank}] Training completed successfully!")
         
-        # 동기화 테스트
+        # Synchronization test
         dist.barrier()
         if rank == 0:
             print("All nodes completed training. Test PASSED!")
@@ -121,7 +122,7 @@ def test_single_node():
     optimizer = optim.SGD(model.parameters(), lr=0.01)
     criterion = nn.MSELoss()
     
-    print("Starting single-node training simulation...")
+    print("Starting single-node training test...")
     
     for epoch in range(3):
         data = torch.randn(32, 10).to(device)
@@ -144,7 +145,7 @@ def main():
     print(f"Hostname: {socket.gethostname()}")
     print(f"Available GPUs: {torch.cuda.device_count()}")
     
-    # 환경 변수 출력
+    # Print environment variables
     env_vars = ['RANK', 'WORLD_SIZE', 'MASTER_ADDR', 'MASTER_PORT', 'CUDA_VISIBLE_DEVICES']
     for var in env_vars:
         value = os.environ.get(var, 'Not Set')
@@ -152,7 +153,7 @@ def main():
     
     print("-" * 50)
     
-    # 분산 모드인지 확인
+    # Check if running in distributed mode
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         print("Detected distributed mode - running distributed test")
         test_distributed_training()

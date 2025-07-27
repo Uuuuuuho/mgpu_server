@@ -105,12 +105,25 @@ class Scheduler:
         return False
 
     def get_queue(self):
+        """Get queue snapshot without blocking"""
         with self.lock:
-            return [job.to_dict() if getattr(job, 'status', '') != 'error' else {**job.to_dict(), 'error_msg': getattr(job, 'error_msg', '')} for job in self.job_queue]
+            return [job.to_dict() if getattr(job, 'status', '') != 'error' else {**job.to_dict(), 'error_msg': getattr(job, 'error_msg', '')} for job in list(self.job_queue)]
 
     def get_running(self):
+        """Get running jobs snapshot without blocking"""
         with self.lock:
-            return [job.to_dict() for job in self.running_jobs.values()]
+            return [job.to_dict() for job in list(self.running_jobs.values())]
+    
+    def get_queue_status(self):
+        """Get complete queue status in a single lock"""
+        with self.lock:
+            queue_jobs = [job.to_dict() if getattr(job, 'status', '') != 'error' else {**job.to_dict(), 'error_msg': getattr(job, 'error_msg', '')} for job in list(self.job_queue)]
+            running_jobs = [job.to_dict() for job in list(self.running_jobs.values())]
+        return {
+            'status': 'ok',
+            'queue': queue_jobs,
+            'running': running_jobs
+        }
 
     def _stream_output_to_client(self, job, proc):
         """Stream job output back to the client terminal"""
@@ -366,9 +379,9 @@ def handle_client(conn, scheduler, max_job_time):
             # For interactive jobs, connection stays open for streaming
             
         elif cmd == 'queue':
-            queue = scheduler.get_queue()
-            running = scheduler.get_running()
-            response_data = json.dumps({'status':'ok','queue':queue,'running':running}).encode()
+            # Use thread-safe queue status method
+            queue_status = scheduler.get_queue_status()
+            response_data = json.dumps(queue_status).encode()
             conn.send(response_data)
             try:
                 conn.shutdown(socket.SHUT_WR)

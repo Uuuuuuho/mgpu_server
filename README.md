@@ -1,239 +1,388 @@
 # Multi-GPU Scheduler
 
+A simplified, reliable multi-GPU job scheduling system for distributed computing environments.
+
 ## Overview
 
-This project provides a multi-user, multi-GPU job scheduling system for efficient and fair GPU resource sharing across **single or multiple nodes**. It offers a Slurm-like CLI (`mgpu_srun`, `mgpu_queue`, `mgpu_cancel`) and supports resource-aware scheduling, queueing, user/job cancellation, per-job and global time limits, flexible environment setup, and **distributed multi-node execution**.
+The Multi-GPU Scheduler is a lightweight job scheduling system designed to manage GPU resources efficiently. This version prioritizes **simplicity, stability, and maintainability** over complex features, providing a clean foundation for GPU resource management.
 
-## Project Structure
+## System Architecture
 
-```
-multigpu_scheduler/
-├── src/                     # Source code
-│   ├── mgpu_scheduler_server.py  # Single-node scheduler server
-│   ├── mgpu_master_server.py     # Multi-node master server (NEW)
-│   ├── mgpu_node_agent.py        # Node agent for multi-node (NEW)
-│   ├── mgpu_srun.py             # Single-node job submission client
-│   ├── mgpu_srun_multinode.py   # Multi-node job submission client (NEW)
-│   ├── mgpu_queue.py            # Queue status viewer
-│   └── mgpu_cancel.py           # Job cancellation tool
-├── test/                    # Test scripts
-│   ├── test_output.py           # Output streaming test
-│   ├── test_cancellation.py    # Job cancellation test
-│   └── README.md               # Test documentation
-├── build-config/            # PyInstaller configuration files
-├── docs/                    # Documentation
-│   └── multi-node-design.md    # Multi-node architecture design
-├── dist/                    # Built binaries (after build)
-├── cluster_config.yaml      # Multi-node cluster configuration
-├── build_and_run.sh         # Build script
-├── Makefile                 # Build automation
-└── README.md               # This file
-```
+### Current Implementation
 
----
+**Note**: This system currently supports **single-node operation** with **localhost execution**. Multi-node support requires additional node agent implementation.
 
-## Features
+#### Available Components
 
-### Single-Node Features
-- Multiple users can submit jobs concurrently
-- Slurm-style CLI: `mgpu_srun` (job submission), `mgpu_queue` (queue/status), `mgpu_cancel` (job cancellation)
-- Specific GPU selection: users can specify exact GPU IDs to use
-- Resource allocation based on GPU memory requirements
-- Fair scheduling: jobs are queued if resources are insufficient, and started automatically when available
-- Per-job and global time limits, with context switching (move to end of queue)
-- Interactive mode with real-time output streaming
-- Automatic job cancellation when client disconnects
+1. **Simple Master Server** (`mgpu_simple_master.py`)
+   - **Currently working** implementation
+   - Handles job queuing and local execution
+   - Socket-based API for client communication
+   - Supports localhost GPU allocation
 
-### Multi-Node Features (NEW)
-- **Multi-node distributed job execution** across GPU clusters
-- **Automatic node selection** and resource allocation
-- **PyTorch distributed training** support with automatic environment setup
-- **MPI-based distributed execution** support
-- **Node-specific job placement** (--nodelist, --exclude options)
-- **Cluster-wide resource monitoring** and load balancing
-- **Fault tolerance** with node failure detection and recovery
-- **Network topology-aware scheduling** for optimal performance
+2. **Simple Node Agent** (`mgpu_simple_node.py`)
+   - **Reference implementation** for remote nodes
+   - Can be deployed on compute nodes
+   - Communicates with master server
+   - **Requires manual setup** for multi-node clusters
 
----
+3. **Client Interface** (`mgpu_simple_client.py`)
+   - **Currently working** command-line client
+   - Simple interface: submit, queue, cancel
+   - Works with the simple master server
 
-## Installation & Build
+#### Future Development
 
-### For Production Use
-1. Python 3.8 or higher required
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   pip install pyinstaller
-   ```
-3. Build binaries:
-   ```bash
-   ./build_and_run.sh
-   # OR using Makefile
-   make build
-   ```
-   Executables will be created in the `dist/` directory.
+4. **Enhanced Master Server** (`mgpu_master_server.py`)
+   - **Under development** - simplified architecture
+   - Will replace complex legacy system
+   - Currently incomplete
 
-4. Optional: Clean build artifacts
-   ```bash
-   make clean        # Remove build/dist directories
-   make clean-all    # Also remove spec files
-   make regenerate-specs  # Regenerate PyInstaller spec files
-   ```
+5. **Enhanced Client** (`mgpu_srun_multinode.py`)
+   - **Under development** - improved interface
+   - Will provide better user experience
+   - Currently incomplete
 
-### For Development
-To run directly from source code:
+## Key Features
+
+### Simplified Design Philosophy
+- **Clean codebase**: Easy to understand and maintain
+- **Minimal dependencies**: Reduces complexity and potential issues
+- **Proven patterns**: Based on working simple implementations
+- **Robust error handling**: Graceful failure recovery
+
+### Resource Management
+- **GPU allocation**: Automatic assignment based on availability
+- **Node management**: Support for single and multi-node setups
+- **Resource cleanup**: Automatic cleanup on job completion
+- **Localhost-first**: Works out of the box on single machines
+
+### Job Management
+- **Simple submission**: Submit jobs with minimal configuration
+- **Queue status**: Real-time view of job and resource status
+- **Job control**: Cancel and monitor running jobs
+- **Status tracking**: Clear job state management
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.7+
+- PyYAML
+- Basic CUDA setup (for GPU jobs)
+
+### Installation
+
 ```bash
-# Install dependencies
+git clone <repository-url>
+cd multigpu_scheduler
 pip install -r requirements.txt
-
-# Start server
-python src/mgpu_scheduler_server.py
-
-# Submit jobs (in another terminal)
-python src/mgpu_srun.py --gpu-ids 0 -- python test/test_output.py
-
-# Check queue status
-python src/mgpu_queue.py
-
-# Cancel a job
-python src/mgpu_cancel.py <job_id>
 ```
 
----
+### Basic Usage
 
-## Usage
+**Currently working with the simple implementation:**
 
-### Single-Node Mode
-
-#### Start the Server (as root)
+1. **Start the simple master server:**
 ```bash
-sudo ./dist/mgpu_scheduler_server --max-job-time 3600
+python src/mgpu_simple_master.py --host localhost --port 8080
 ```
 
-#### Client Examples
+2. **Submit a job (simple client):**
 ```bash
-# Submit an interactive job (see output in real-time)
-./dist/mgpu_srun --gpu-ids 0 -- python train.py
-
-# Submit a background job
-./dist/mgpu_srun --gpu-ids 0,1 --mem 8000 --time-limit 600 --background -- python train.py
+python src/mgpu_simple_client.py submit --gpus 1 "python your_script.py"
 ```
 
-### Multi-Node Mode (NEW)
-
-#### 1. Setup Cluster Configuration
+**Job submission with timeout options:**
 ```bash
-# Copy and modify cluster configuration
-cp cluster_config.yaml /etc/mgpu_cluster.yaml
-# Edit the file with your cluster node information
+# Interactive job with custom timeouts
+python src/mgpu_simple_client.py submit --interactive --gpus 1 \
+  --session-timeout 3600 \
+  --max-consecutive-timeouts 60 \
+  "python long_running_script.py"
+
+# Non-interactive job with custom timeouts
+python src/mgpu_simple_client.py submit --gpus 1 \
+  --max-wait-time 600 \
+  --connection-timeout 15 \
+  "python batch_job.py"
 ```
 
-#### 2. Start Master Server
+3. **Check queue status:**
 ```bash
-# On the master node
-sudo ./dist/mgpu_master_server --config /etc/mgpu_cluster.yaml --port 8080
+python src/mgpu_simple_client.py queue
 ```
 
-#### 3. Start Node Agents
+4. **Cancel a job:**
 ```bash
-# On each compute node
-sudo ./dist/mgpu_node_agent --node-id node001 --master-host master.example.com --master-port 8080 --agent-port 8081
+python src/mgpu_simple_client.py cancel <job_id>
 ```
 
-#### 4. Submit Multi-Node Jobs
+### Multi-node Setup (Manual Node Connection)
+
+**How multiple nodes connect to the master server:**
+
+The current working implementation (`mgpu_simple_*`) supports multi-node setups through manual node agent deployment:
+
+1. **Start master server on the head node:**
 ```bash
-# PyTorch distributed training across 2 nodes, 4 GPUs per node
-./dist/mgpu_srun_multinode --nodes 2 --gpus-per-node 4 --distributed -- \
-  torchrun --nnodes=2 --nproc_per_node=4 --master_addr=\$MASTER_ADDR --master_port=29500 train.py
-
-# MPI distributed execution
-./dist/mgpu_srun_multinode --nodes 4 --gpus-per-node 2 --mpi -- \
-  mpirun -np 8 python mpi_train.py
-
-# Specific node selection
-./dist/mgpu_srun_multinode --nodelist node001,node002 --gpus-per-node 2 -- python train.py
-
-# Single node with specific GPUs (same as single-node mode)
-./dist/mgpu_srun_multinode --gpu-ids 0,1,2,3 -- python train.py
+python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
 ```
 
-### Environment Variables for Multi-Node
+2. **On each worker node, connect to the master:**
 ```bash
-export MGPU_MASTER_HOST=master.example.com
-export MGPU_MASTER_PORT=8080
+# Replace <MASTER_IP> with actual master server IP
+python src/mgpu_simple_node.py --master-host <MASTER_IP> --master-port 8080 --node-id node001
+python src/mgpu_simple_node.py --master-host <MASTER_IP> --master-port 8080 --node-id node002
+# ... repeat for each worker node
 ```
 
----
+3. **Submit jobs from any client:**
+```bash
+# Client can run from any machine that can reach the master
+python src/mgpu_simple_client.py --host <MASTER_IP> --port 8080 submit --gpus 2 "python distributed_script.py"
+```
 
-## Interactive vs Background Mode
-- **Interactive mode** (`--interactive`): See job output in real-time on your terminal. You can detach with Ctrl+C while keeping the job running.
-- **Background mode** (default): Job runs silently. Check status with `mgpu_queue` or view logs from job output files.
+**Key Points:**
+- **Node agents must be started manually** on each worker machine
+- **Master server coordinates** all GPU resources across connected nodes
+- **Automatic load balancing** - jobs are assigned to available GPUs across all connected nodes
+- **Network accessibility** - all nodes must be able to reach the master server's IP and port
 
----
+## Configuration
 
-## How It Works & Policies
-- The server communicates with clients via UNIX domain socket (`/tmp/mgpu_scheduler.sock`)
-- Jobs are executed in the user's home directory with proper user privileges
-- Users specify exact GPU IDs they want to use (e.g., `--gpu-ids 0,2,3`)
-- `CUDA_VISIBLE_DEVICES` is automatically set in the command environment to match requested GPUs
-- Inside jobs, PyTorch/CUDA will see GPUs renumbered as `cuda:0`, `cuda:1`, etc., mapped to the physical GPUs requested
-- Jobs are only started if there is enough GPU memory available on the requested GPUs
-- If resources are insufficient, jobs wait in the queue and are started automatically when resources are freed
-- Context switch (move to end of queue) occurs if per-job or global time limit is exceeded
-- Optional environment setup commands are executed before the main job command
+### Single-node Configuration (Current)
 
----
+For **localhost-only** operation (current working setup):
 
-## GPU ID Mapping
-When you specify `--gpu-ids 1,3`, your job will:
-1. Set `CUDA_VISIBLE_DEVICES=1,3` in the environment
-2. Inside your job, `cuda:0` maps to physical GPU 1, `cuda:1` maps to physical GPU 3
-3. Use `cuda:0`, `cuda:1`, etc. in your training scripts (not the physical GPU IDs)
+**No configuration file needed** - the simple master server works out of the box:
 
----
+```bash
+python src/mgpu_simple_master.py --host localhost --port 8080
+```
 
-## Notes and Cautions
-- The server must be run as root. User jobs are executed with the target user's privileges using setuid/setgid (no sudo required)
-- Always use local GPU IDs (`cuda:0`, `cuda:1`, etc.) in your training scripts, not physical GPU IDs
-- Environment setup commands (if provided) are executed before setting CUDA_VISIBLE_DEVICES and running the job
-- For distributed training with torchrun, specify the number of processes that matches your GPU count
+The system will automatically detect available GPUs on localhost.
 
----
+### Multi-node Configuration (Advanced Setup)
+
+**For advanced users** wanting to set up multiple nodes:
+
+1. **Start master server on main node:**
+```bash
+python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+```
+
+2. **Start node agents on compute nodes:**
+```bash
+# On node 1
+python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node001
+
+# On node 2  
+python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node002
+```
+
+3. **Configure firewall** to allow communication on port 8080
+
+## Usage Examples
+
+### Job Submission (Current Working Commands)
+
+```bash
+# Simple single-GPU job
+python src/mgpu_simple_client.py submit --gpus 1 "python train.py"
+
+# Multi-GPU job on localhost
+python src/mgpu_simple_client.py submit --gpus 2 "python distributed_train.py"
+
+# Interactive job with output streaming
+python src/mgpu_simple_client.py submit --gpus 1 --interactive "python interactive_script.py"
+
+# Interactive job with custom timeouts for long-running GPU workloads
+python src/mgpu_simple_client.py submit --gpus 1 --interactive \
+  --session-timeout 14400 \
+  --max-consecutive-timeouts 120 \
+  "python gpu_training.py"
+
+# Non-interactive job with custom monitoring timeouts
+python src/mgpu_simple_client.py submit --gpus 1 \
+  --max-wait-time 1800 \
+  --connection-timeout 20 \
+  "python batch_processing.py"
+```
+
+### Queue Management
+
+```bash
+# View all jobs and node status
+python src/mgpu_simple_client.py queue
+
+# Cancel a specific job
+python src/mgpu_simple_client.py cancel <job_id>
+```
+
+### Advanced: Multi-node Jobs
+
+**Only if you have set up node agents on multiple machines:**
+
+```bash
+# Submit job to specific node
+python src/mgpu_simple_client.py submit --gpus 1 --node-gpu-ids "node001:0" "python script.py"
+
+# Multi-node distributed job
+python src/mgpu_simple_client.py submit --gpus 4 --node-gpu-ids "node001:0,1;node002:0,1" "python distributed_training.py"
+```
+
+## Command Reference
+
+### mgpu_simple_client.py (Current Working Client)
+
+**submit** - Submit a new job
+```bash
+submit [--gpus N] [--interactive] [--node-gpu-ids "node:gpu_list"] \
+       [--session-timeout SECONDS] [--connection-timeout SECONDS] \
+       [--max-wait-time SECONDS] [--max-consecutive-timeouts COUNT] \
+       "command"
+```
+
+**Timeout Options:**
+- `--session-timeout`: Maximum session duration in seconds (default: 7200 = 2 hours)
+- `--connection-timeout`: Socket connection timeout in seconds (default: 30)
+- `--max-wait-time`: Maximum wait time for job output in seconds (default: 300 = 5 minutes)
+- `--max-consecutive-timeouts`: Maximum consecutive timeouts before giving up (default: 30)
+
+**queue** - Show queue status
+```bash
+queue
+```
+
+**cancel** - Cancel a job
+```bash
+cancel <job_id>
+```
+
+### mgpu_simple_master.py (Current Working Server)
+
+**Start the master server:**
+```bash
+python src/mgpu_simple_master.py [--host HOST] [--port PORT]
+```
+
+### mgpu_simple_node.py (For Multi-node Setup)
+
+**Start a node agent:**
+```bash
+python src/mgpu_simple_node.py --master-host HOST --master-port PORT --node-id NODE_NAME
+```
+
+## Development
+
+### Architecture Principles
+
+1. **Simplicity First**: Keep code simple and readable
+2. **Reliability**: Prefer stable, proven approaches
+3. **Maintainability**: Easy to debug and extend
+4. **Testability**: Clear interfaces for testing
+
+### Code Structure
+
+**Currently working implementations:**
+```
+src/
+├── mgpu_simple_master.py      # ✅ Working master server
+├── mgpu_simple_client.py      # ✅ Working client interface  
+├── mgpu_simple_node.py        # ✅ Working node agent
+├── mgpu_master_server.py      # 🚧 Under development (simplified)
+├── mgpu_srun_multinode.py     # 🚧 Under development (enhanced client)
+└── mgpu_*.py                  # 📚 Legacy complex implementations
+```
+
+**Recommended for new users:** Start with `mgpu_simple_*` files - they are stable and fully functional.
+
+### Testing
+
+```bash
+# Basic functionality test
+python test/test_torch_load.py
+
+# Run test suite
+python test/run_tests.py
+```
 
 ## Troubleshooting
 
-### "No module named 'psutil'" Error
-If you get this error when running the server binary:
+### Common Issues
 
-1. **Rebuild with explicit dependencies**:
-   ```bash
-   # Make sure you're in your virtual environment
-   source venv/bin/activate
-   pip install psutil pyinstaller
-   ./build_and_run.sh
-   ```
+1. **Server won't start**
+   - Check if port 8080 is available
+   - Verify configuration file syntax
+   - Check Python dependencies
 
-2. **Alternative: Run from source**:
-   ```bash
-   # Instead of using the binary, run directly from Python
-   python mgpu_scheduler_server.py --max-job-time 3600
-   ```
+2. **Jobs not running**
+   - Verify GPU availability
+   - Check CUDA installation
+   - Review server logs
 
-3. **Check dependencies**:
-   ```bash
-   # Verify psutil is installed in your environment
-   python -c "import psutil; print('psutil version:', psutil.__version__)"
-   ```
+3. **Connection errors**
+   - Ensure master server is running
+   - Check firewall settings
+   - Verify network connectivity
 
-### Permission Issues
-- Ensure the server is run as root: `sudo ./dist/mgpu_scheduler_server`
-- Make sure binary files are executable: `chmod +x dist/*`
+### Debug Mode
 
-### GPU Detection Issues
-- Verify nvidia-smi works: `nvidia-smi`
-- Check CUDA installation and GPU visibility
+Enable detailed logging:
+```bash
+python src/mgpu_master_server.py --config cluster_config.yaml --debug
+```
+
+## Migration Guide
+
+### From Complex v1.0 System
+
+If you're migrating from the previous complex system:
+
+1. **Backup your current setup**
+2. **Update configuration** to the new simplified YAML format
+3. **Test with simple jobs** before production use
+4. **Review and simplify** your job submission scripts
+
+### Configuration Changes
+
+- Simplified YAML structure
+- Removed complex scheduling options
+- Focus on core functionality
+
+## Contributing
+
+1. Follow the simplicity principle
+2. Write clear, readable code
+3. Add tests for new features
+4. Update documentation
+
+## Version History
+
+### v2.0.0 - Simplified Architecture
+- Complete rewrite focusing on simplicity and reliability
+- Removed complex features that caused stability issues
+- Clean, maintainable codebase
+- Improved error handling and recovery
+
+### v1.0.0 - Complex System (Legacy)
+- Feature-rich but complex architecture
+- Multiple threading and streaming features
+- Known stability and maintenance issues
+
+## License
+
+[Specify your license here]
+
+## Support
+
+For issues:
+1. Check this README and troubleshooting section
+2. Review system logs for errors
+3. Test with the simple reference implementations
+4. Report issues with clear reproduction steps
 
 ---
 
-## License
-MIT
+**Note**: This simplified version prioritizes stability and maintainability. If you need advanced features, consider implementing them incrementally on top of this solid foundation.

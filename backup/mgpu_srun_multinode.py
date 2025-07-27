@@ -58,6 +58,9 @@ def parse_args():
                         type=int,
                         default=int(os.getenv('MGPU_MASTER_PORT', '8080')),
                         help='Master server port')
+    # GPUs per specific node mapping: node:gpu_ids pairs
+    parser.add_argument('--node-gpu-ids', type=str,
+                        help='Semicolon-separated list of node:gpu_ids pairs, e.g. node1:0,1;node2:2,3')
     # Command to execute
     parser.add_argument('command', nargs=argparse.REMAINDER,
                         help='Command to run under scheduler')
@@ -76,6 +79,15 @@ def build_node_requirements(args):
         req['nodelist'] = args.nodelist.split(',')
     if args.exclude:
         req['exclude'] = args.exclude.split(',')
+    # Specific GPUs per node
+    if getattr(args, 'node_gpu_ids', None):
+        mapping = {}
+        for pair in args.node_gpu_ids.split(';'):
+            if ':' in pair:
+                node, ids = pair.split(':', 1)
+                mapping[node] = [int(x) for x in ids.split(',') if x]
+        if mapping:
+            req['node_gpu_ids'] = mapping
     return req
 
 def main():
@@ -86,11 +98,23 @@ def main():
 
     user = getpass.getuser()
     job_id = generate_job_id()
-    cmdline = ' '.join(args.command)
+    
+    # Remove leading '--' from command if present (argparse artifact)
+    command_parts = args.command
+    if command_parts and command_parts[0] == '--':
+        command_parts = command_parts[1:]
+    
+    if not command_parts:
+        print("Error: no command specified after --", file=sys.stderr)
+        sys.exit(1)
+    
+    cmdline = ' '.join(command_parts)
 
     node_req = build_node_requirements(args)
-    # Determine total_gpus
-    if 'nodes' in node_req and 'gpus_per_node' in node_req:
+    # Determine total_gpus, prioritizing specific per-node GPU mapping
+    if 'node_gpu_ids' in node_req:
+        total_gpus = sum(len(lst) for lst in node_req['node_gpu_ids'].values())
+    elif 'nodes' in node_req and 'gpus_per_node' in node_req:
         total_gpus = node_req['nodes'] * node_req['gpus_per_node']
     elif 'gpu_ids' in node_req:
         total_gpus = len(node_req['gpu_ids'])
@@ -131,6 +155,18 @@ def main():
         sock.send(json.dumps(request).encode())
 
         if args.interactive:
+            # First receive the submission response
+            response = sock.recv(8192).decode()
+            result = json.loads(response)
+            
+            if result.get('status') != 'ok':
+                print(f"Error: {result.get('message')}", file=sys.stderr)
+                sys.exit(1)
+            
+            print(f"Job {result.get('job_id')} submitted")
+            print("Starting interactive session...")
+            print("=" * 50)
+            
             # Stream JSON messages until completion
             buffer = b''
             while True:
@@ -138,18 +174,24 @@ def main():
                 if not chunk:
                     break
                 buffer += chunk
-                parts = buffer.split(b'\n')
-                for line in parts[:-1]:
-                    try:
-                        msg = json.loads(line.decode())
-                        if msg.get('type') == 'output':
-                            sys.stdout.write(msg.get('data', ''))
-                        elif msg.get('type') == 'completion':
-                            print(f"\nJob {msg.get('job_id')} completed with exit code {msg.get('exit_code')}" )
-                            return
-                    except Exception:
-                        pass
-                buffer = parts[-1]
+                
+                # Parse JSON messages
+                while b'\n' in buffer:
+                    line, buffer = buffer.split(b'\n', 1)
+                    if line.strip():
+                        try:
+                            msg = json.loads(line.decode())
+                            if msg.get('type') == 'output':
+                                print(msg.get('data', '').rstrip())
+                            elif msg.get('type') == 'completion':
+                                print("=" * 50)
+                                print(f"Job completed with exit code: {msg.get('exit_code')}")
+                                return
+                            elif msg.get('type') == 'error':
+                                print(f"ERROR: {msg.get('message')}")
+                                return
+                        except json.JSONDecodeError:
+                            print(f"Invalid JSON: {line}")
         else:
             resp = sock.recv(4096).decode()
             try:
