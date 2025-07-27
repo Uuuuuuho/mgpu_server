@@ -13,23 +13,20 @@ def check_cuda_availability():
     print("="*50)
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
-    sys.stdout.flush()  # Force output to be sent immediately
     
     if torch.cuda.is_available():
         print(f"CUDA version: {torch.version.cuda}")
         print(f"Number of available GPUs: {torch.cuda.device_count()}")
-        sys.stdout.flush()
         for i in range(torch.cuda.device_count()):
             print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
             print(f"GPU {i} memory: {torch.cuda.get_device_properties(i).total_memory / 1024**3:.1f} GB")
-            sys.stdout.flush()
     else:
         print("CUDA is not available. Running in CPU mode.")
-        sys.stdout.flush()
     print()
+    sys.stdout.flush()  # Force output to be sent immediately
 
-def matrix_multiplication_test(device, size=2048, iterations=100):
-    """GPU load test with matrix multiplication (reduced iterations for interactive testing)"""
+def matrix_multiplication_test(device, size=1024, iterations=50):
+    """GPU load test with matrix multiplication (reduced for interactive testing)"""
     print(f"Matrix multiplication test started ({device})")
     print(f"Matrix size: {size}x{size}, iterations: {iterations}")
     sys.stdout.flush()
@@ -46,9 +43,9 @@ def matrix_multiplication_test(device, size=2048, iterations=100):
     
     for i in range(iterations):
         c = torch.matmul(a, b)
-        if i % 20 == 0:
+        if i % 10 == 0:  # More frequent progress updates
             print(f"Progress: {i+1}/{iterations}")
-            sys.stdout.flush()  # Force output immediately
+            sys.stdout.flush()
     
     if device.type == 'cuda':
         torch.cuda.synchronize()
@@ -63,34 +60,15 @@ def matrix_multiplication_test(device, size=2048, iterations=100):
     
     return elapsed
 
-def convolution_test(device, batch_size=32, iterations=50):
-    """GPU load test with CNN operations"""
+def simple_convolution_test(device, batch_size=4, iterations=20):
+    """GPU load test with CNN operations (reduced for interactive testing)"""
     print(f"Convolution operation test started ({device})")
     print(f"Batch size: {batch_size}, iterations: {iterations}")
     sys.stdout.flush()
     
-    # Define simple CNN model
-    class SimpleCNN(nn.Module):
-        def __init__(self):
-            super(SimpleCNN, self).__init__()
-            self.conv1 = nn.Conv2d(3, 64, 3, padding=1)
-            self.conv2 = nn.Conv2d(64, 128, 3, padding=1)
-            self.conv3 = nn.Conv2d(128, 256, 3, padding=1)
-            self.pool = nn.MaxPool2d(2, 2)
-            # Fixed: Calculate correct input size for FC layer
-            # After 2 pooling layers: 224 -> 112 -> 56
-            self.fc = nn.Linear(256 * 56 * 56, 1000)
-            
-        def forward(self, x):
-            x = self.pool(F.relu(self.conv1(x)))
-            x = self.pool(F.relu(self.conv2(x)))
-            x = F.relu(self.conv3(x))
-            x = x.view(x.size(0), -1)
-            x = self.fc(x)
-            return x
-    
-    model = SimpleCNN().to(device)
-    input_data = torch.randn(batch_size, 3, 224, 224, device=device)
+    # Simple conv operation without problematic FC layer
+    conv = nn.Conv2d(3, 64, 3, padding=1).to(device)
+    input_data = torch.randn(batch_size, 3, 64, 64, device=device)
     
     if device.type == 'cuda':
         torch.cuda.synchronize()
@@ -99,8 +77,8 @@ def convolution_test(device, batch_size=32, iterations=50):
     
     for i in range(iterations):
         with torch.no_grad():
-            output = model(input_data)
-        if i % 10 == 0:
+            output = conv(input_data)
+        if i % 5 == 0:  # More frequent progress updates
             print(f"Progress: {i+1}/{iterations}")
             sys.stdout.flush()
     
@@ -113,54 +91,68 @@ def convolution_test(device, batch_size=32, iterations=50):
     print(f"Total execution time: {elapsed:.2f}s")
     print(f"Average inference time: {elapsed/iterations*1000:.2f}ms")
     print()
+    sys.stdout.flush()
     
     return elapsed
 
-def memory_stress_test(device, memory_gb=2.0):
-    """GPU memory stress test"""
+def memory_stress_test(device, memory_gb=0.5):
+    """GPU memory stress test (reduced for interactive testing)"""
     print(f"Memory stress test started ({device})")
     print(f"Memory to allocate: {memory_gb} GB")
+    sys.stdout.flush()
     
     if device.type == 'cuda':
         # Check current memory usage
         initial_memory = torch.cuda.memory_allocated() / 1024**3
         print(f"Initial memory usage: {initial_memory:.2f} GB")
+        sys.stdout.flush()
     
     try:
         # Create large tensor
         elements = int(memory_gb * 1024**3 / 4)  # float32 is 4 bytes
+        print("Allocating memory...")
+        sys.stdout.flush()
         large_tensor = torch.randn(elements, device=device, dtype=torch.float32)
         
         if device.type == 'cuda':
             current_memory = torch.cuda.memory_allocated() / 1024**3
             print(f"Current memory usage: {current_memory:.2f} GB")
+            sys.stdout.flush()
         
         # Perform operations in memory
         print("Performing operations in memory...")
+        sys.stdout.flush()
         result = torch.sum(large_tensor)
         print(f"Sum: {result.item():.2e}")
+        sys.stdout.flush()
         
         # Free memory
+        print("Releasing memory...")
+        sys.stdout.flush()
         del large_tensor
         if device.type == 'cuda':
             torch.cuda.empty_cache()
             final_memory = torch.cuda.memory_allocated() / 1024**3
             print(f"After memory release: {final_memory:.2f} GB")
+            sys.stdout.flush()
         
         print("Memory stress test completed")
+        sys.stdout.flush()
         
     except RuntimeError as e:
         print(f"Memory stress test failed: {e}")
+        sys.stdout.flush()
     
     print()
 
-def parallel_computation_test(device, num_streams=4):
-    """Parallel computation test (using CUDA streams)"""
+def parallel_computation_test(device, num_streams=2):
+    """Parallel computation test (reduced for interactive testing)"""
     if device.type != 'cuda':
         print("Parallel computation test is only supported on CUDA.")
         return
     
     print(f"Parallel computation test started (number of streams: {num_streams})")
+    sys.stdout.flush()
     
     streams = [torch.cuda.Stream() for _ in range(num_streams)]
     tensors = []
@@ -170,11 +162,12 @@ def parallel_computation_test(device, num_streams=4):
     # Perform parallel operations on each stream
     for i, stream in enumerate(streams):
         with torch.cuda.stream(stream):
-            a = torch.randn(2048, 2048, device=device)
-            b = torch.randn(2048, 2048, device=device)
+            a = torch.randn(1024, 1024, device=device)  # Reduced size
+            b = torch.randn(1024, 1024, device=device)  # Reduced size
             c = torch.matmul(a, b)
             tensors.append(c)
             print(f"Stream {i+1} started")
+            sys.stdout.flush()
     
     # Synchronize all streams
     torch.cuda.synchronize()
@@ -184,20 +177,23 @@ def parallel_computation_test(device, num_streams=4):
     
     print(f"Parallel computation completed in: {elapsed:.2f}s")
     print()
+    sys.stdout.flush()
 
-def continuous_load_test(device, duration_seconds=30):
-    """Continuous load test"""
+def continuous_load_test(device, duration_seconds=10):
+    """Continuous load test (reduced for interactive testing)"""
     print(f"Continuous load test started ({duration_seconds} seconds)")
-    print("Press Ctrl+C to interrupt.")
+    print("This will show progress every second...")
+    sys.stdout.flush()
     
     start_time = time.time()
     iteration = 0
+    last_report = start_time
     
     try:
         while time.time() - start_time < duration_seconds:
             # Perform various operations alternately
-            a = torch.randn(1024, 1024, device=device)
-            b = torch.randn(1024, 1024, device=device)
+            a = torch.randn(512, 512, device=device)  # Reduced size
+            b = torch.randn(512, 512, device=device)  # Reduced size
             
             # Matrix multiplication
             c = torch.matmul(a, b)
@@ -210,9 +206,13 @@ def continuous_load_test(device, duration_seconds=30):
             
             iteration += 1
             
-            if iteration % 100 == 0:
-                elapsed = time.time() - start_time
+            # Report progress every second
+            current_time = time.time()
+            if current_time - last_report >= 1.0:
+                elapsed = current_time - start_time
                 print(f"Elapsed time: {elapsed:.1f}s, iterations: {iteration}")
+                sys.stdout.flush()
+                last_report = current_time
         
         total_time = time.time() - start_time
         print(f"Continuous load test completed")
@@ -225,9 +225,10 @@ def continuous_load_test(device, duration_seconds=30):
         print(f"Execution time: {total_time:.2f}s, iterations: {iteration}")
     
     print()
+    sys.stdout.flush()
 
 def main():
-    print("PyTorch CUDA Load Test")
+    print("PyTorch CUDA Load Test (Interactive Version)")
     print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     sys.stdout.flush()
@@ -247,19 +248,19 @@ def main():
     sys.stdout.flush()
     
     try:
-        # 1. Matrix multiplication test (reduced for interactive testing)
         print("Starting Test 1/5: Matrix Multiplication")
         sys.stdout.flush()
-        matrix_multiplication_test(device, size=1024, iterations=100)
+        # 1. Matrix multiplication test (reduced)
+        matrix_multiplication_test(device, size=1024, iterations=50)
         
-        # 2. CNN operation test (reduced for interactive testing)
-        print("Starting Test 2/5: CNN Operations")
+        print("Starting Test 2/5: Convolution Operations")
         sys.stdout.flush()
-        convolution_test(device, batch_size=4, iterations=50)
+        # 2. Simple convolution test (reduced)
+        simple_convolution_test(device, batch_size=4, iterations=20)
         
-        # 3. Memory stress test (reduced for interactive testing)
         print("Starting Test 3/5: Memory Stress Test")
         sys.stdout.flush()
+        # 3. Memory stress test (reduced)
         memory_stress_test(device, memory_gb=0.5)
         
         # 4. Parallel computation test (CUDA only)
@@ -268,9 +269,9 @@ def main():
             sys.stdout.flush()
             parallel_computation_test(device, num_streams=2)
         
-        # 5. Continuous load test (reduced for interactive testing)
         print("Starting Test 5/5: Continuous Load Test")
         sys.stdout.flush()
+        # 5. Continuous load test (reduced)
         continuous_load_test(device, duration_seconds=10)
         
         print("🎉 All tests completed successfully!")
