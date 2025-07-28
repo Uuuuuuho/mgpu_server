@@ -79,43 +79,89 @@ cd multigpu_scheduler
 pip install -r requirements.txt
 ```
 
+### Virtual Environment Setup
+
+For PyTorch and GPU-enabled workloads, use a dedicated virtual environment:
+
+```bash
+# Activate the virtual environment (example path)
+source venv/bin/activate
+
+# Verify PyTorch installation
+python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.cuda.is_available()}')"
+```
+
+**Note**: Replace `venv/bin/activate` with your actual virtual environment path.
+
 ### Basic Usage
 
 **Currently working with the simple implementation:**
 
-1. **Start the simple master server:**
+#### Step 1: Start the Master Server
+
 ```bash
-python src/mgpu_simple_master.py --host localhost --port 8080
+# Using virtual environment Python
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
 ```
 
-2. **Submit a job (simple client):**
+#### Step 2: Start Node Agent (for multi-node or local execution)
+
 ```bash
-python src/mgpu_simple_client.py submit --gpus 1 "python your_script.py"
+# Start node agent with proper node ID
+venv/bin/python src/mgpu_simple_node.py --node-id node001 --master-host 127.0.0.1 --master-port 8080
+```
+
+#### Step 3: Submit Jobs
+
+**Interactive job with real-time output (recommended for testing):**
+```bash
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python /path/to/your_script.py"
+```
+
+**Non-interactive job (background execution):**
+```bash
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 "venv/bin/python /path/to/your_script.py"
+```
+
+**Example with PyTorch test:**
+```bash
+# Interactive PyTorch test execution
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
+```
+
+#### Step 4: Monitor and Manage Jobs
+
+```bash
+# Check queue status
+venv/bin/python src/mgpu_simple_client.py queue
+
+# Cancel a job
+venv/bin/python src/mgpu_simple_client.py cancel <job_id>
 ```
 
 **Job submission with timeout options:**
 ```bash
 # Interactive job with custom timeouts
-python src/mgpu_simple_client.py submit --interactive --gpus 1 \
+venv/bin/python src/mgpu_simple_client.py submit --interactive --gpus 1 \
   --session-timeout 3600 \
   --max-consecutive-timeouts 60 \
-  "python long_running_script.py"
+  "venv/bin/python long_running_script.py"
 
 # Non-interactive job with custom timeouts
-python src/mgpu_simple_client.py submit --gpus 1 \
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 \
   --max-wait-time 600 \
   --connection-timeout 15 \
-  "python batch_job.py"
+  "venv/bin/python batch_job.py"
 ```
 
 3. **Check queue status:**
 ```bash
-python src/mgpu_simple_client.py queue
+venv/bin/python src/mgpu_simple_client.py queue
 ```
 
 4. **Cancel a job:**
 ```bash
-python src/mgpu_simple_client.py cancel <job_id>
+venv/bin/python src/mgpu_simple_client.py cancel <job_id>
 ```
 
 ### Multi-node Setup (Manual Node Connection)
@@ -126,21 +172,22 @@ The current working implementation (`mgpu_simple_*`) supports multi-node setups 
 
 1. **Start master server on the head node:**
 ```bash
-python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+# Using virtual environment with proper host binding
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
 ```
 
 2. **On each worker node, connect to the master:**
 ```bash
 # Replace <MASTER_IP> with actual master server IP
-python src/mgpu_simple_node.py --master-host <MASTER_IP> --master-port 8080 --node-id node001
-python src/mgpu_simple_node.py --master-host <MASTER_IP> --master-port 8080 --node-id node002
+venv/bin/python src/mgpu_simple_node.py --master-host <MASTER_IP> --master-port 8080 --node-id node001
+venv/bin/python src/mgpu_simple_node.py --master-host <MASTER_IP> --master-port 8080 --node-id node002
 # ... repeat for each worker node
 ```
 
 3. **Submit jobs from any client:**
 ```bash
 # Client can run from any machine that can reach the master
-python src/mgpu_simple_client.py --host <MASTER_IP> --port 8080 submit --gpus 2 "python distributed_script.py"
+venv/bin/python src/mgpu_simple_client.py --host <MASTER_IP> --port 8080 submit --gpus 2 "venv/bin/python distributed_script.py"
 ```
 
 **Key Points:**
@@ -148,6 +195,52 @@ python src/mgpu_simple_client.py --host <MASTER_IP> --port 8080 submit --gpus 2 
 - **Master server coordinates** all GPU resources across connected nodes
 - **Automatic load balancing** - jobs are assigned to available GPUs across all connected nodes
 - **Network accessibility** - all nodes must be able to reach the master server's IP and port
+- **Virtual environment consistency** - ensure the same Python environment is available on all nodes
+
+### Tested Example: PyTorch GPU Workload
+
+Here's a complete working example that has been tested:
+
+1. **Start the system:**
+```bash
+# Terminal 1: Start master server
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+
+# Terminal 2: Start node agent
+venv/bin/python src/mgpu_simple_node.py --node-id node001 --master-host 127.0.0.1 --master-port 8080
+```
+
+2. **Submit and monitor PyTorch test:**
+```bash
+# Terminal 3: Submit interactive PyTorch test
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
+```
+
+**Expected output:**
+```
+Job submission: {'status': 'ok', 'job_id': 'F68FAFEC', 'message': 'Job submitted'}
+Starting interactive session...
+==================================================
+PyTorch CUDA Load Test
+Start time: 2025-07-28 22:32:49
+
+==================================================
+CUDA Environment Check
+==================================================
+PyTorch version: 2.7.1+cu126
+CUDA available: True
+CUDA version: 12.6
+Number of available GPUs: 1
+GPU 0: NVIDIA GeForce RTX 3060
+GPU 0 memory: 12.0 GB
+...
+```
+
+3. **Check system status:**
+```bash
+# Check queue and node status
+venv/bin/python src/mgpu_simple_client.py queue
+```
 
 ## Configuration
 
@@ -158,7 +251,14 @@ For **localhost-only** operation (current working setup):
 **No configuration file needed** - the simple master server works out of the box:
 
 ```bash
-python src/mgpu_simple_master.py --host localhost --port 8080
+# Step 1: Start master server
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+
+# Step 2: Start local node agent
+venv/bin/python src/mgpu_simple_node.py --node-id node001 --master-host 127.0.0.1 --master-port 8080
+
+# Step 3: Submit jobs
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python your_script.py"
 ```
 
 The system will automatically detect available GPUs on localhost.
@@ -169,19 +269,25 @@ The system will automatically detect available GPUs on localhost.
 
 1. **Start master server on main node:**
 ```bash
-python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
 ```
 
 2. **Start node agents on compute nodes:**
 ```bash
-# On node 1
-python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node001
+# On node 1 (ensure virtual environment is available)
+venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node001
 
 # On node 2  
-python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node002
+venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node002
 ```
 
 3. **Configure firewall** to allow communication on port 8080
+
+**Important Requirements:**
+- Same virtual environment must be accessible on all nodes
+- Python executable path should be consistent: `venv/bin/python`
+- Network connectivity between all nodes
+- Shared filesystem (optional but recommended for job scripts)
 
 ## Usage Examples
 
@@ -189,35 +295,38 @@ python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --
 
 ```bash
 # Simple single-GPU job
-python src/mgpu_simple_client.py submit --gpus 1 "python train.py"
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 "venv/bin/python train.py"
 
 # Multi-GPU job on localhost
-python src/mgpu_simple_client.py submit --gpus 2 "python distributed_train.py"
+venv/bin/python src/mgpu_simple_client.py submit --gpus 2 "venv/bin/python distributed_train.py"
 
-# Interactive job with output streaming
-python src/mgpu_simple_client.py submit --gpus 1 --interactive "python interactive_script.py"
+# Interactive job with output streaming (recommended for testing)
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python interactive_script.py"
 
 # Interactive job with custom timeouts for long-running GPU workloads
-python src/mgpu_simple_client.py submit --gpus 1 --interactive \
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive \
   --session-timeout 14400 \
   --max-consecutive-timeouts 120 \
-  "python gpu_training.py"
+  "venv/bin/python gpu_training.py"
 
 # Non-interactive job with custom monitoring timeouts
-python src/mgpu_simple_client.py submit --gpus 1 \
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 \
   --max-wait-time 1800 \
   --connection-timeout 20 \
-  "python batch_processing.py"
+  "venv/bin/python batch_processing.py"
+
+# Real tested example: PyTorch CUDA test
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
 ```
 
 ### Queue Management
 
 ```bash
 # View all jobs and node status
-python src/mgpu_simple_client.py queue
+venv/bin/python src/mgpu_simple_client.py queue
 
 # Cancel a specific job
-python src/mgpu_simple_client.py cancel <job_id>
+venv/bin/python src/mgpu_simple_client.py cancel <job_id>
 ```
 
 ### Advanced: Multi-node Jobs
@@ -226,10 +335,10 @@ python src/mgpu_simple_client.py cancel <job_id>
 
 ```bash
 # Submit job to specific node
-python src/mgpu_simple_client.py submit --gpus 1 --node-gpu-ids "node001:0" "python script.py"
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --node-gpu-ids "node001:0" "venv/bin/python script.py"
 
 # Multi-node distributed job
-python src/mgpu_simple_client.py submit --gpus 4 --node-gpu-ids "node001:0,1;node002:0,1" "python distributed_training.py"
+venv/bin/python src/mgpu_simple_client.py submit --gpus 4 --node-gpu-ids "node001:0,1;node002:0,1" "venv/bin/python distributed_training.py"
 ```
 
 ## Command Reference
@@ -264,14 +373,20 @@ cancel <job_id>
 
 **Start the master server:**
 ```bash
-python src/mgpu_simple_master.py [--host HOST] [--port PORT]
+venv/bin/python src/mgpu_simple_master.py [--host HOST] [--port PORT]
+
+# Example: Bind to all interfaces on port 8080
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
 ```
 
 ### mgpu_simple_node.py (For Multi-node Setup)
 
 **Start a node agent:**
 ```bash
-python src/mgpu_simple_node.py --master-host HOST --master-port PORT --node-id NODE_NAME
+venv/bin/python src/mgpu_simple_node.py --master-host HOST --master-port PORT --node-id NODE_NAME
+
+# Example: Connect to local master
+venv/bin/python src/mgpu_simple_node.py --master-host 127.0.0.1 --master-port 8080 --node-id node001
 ```
 
 ## Development
@@ -301,12 +416,40 @@ src/
 ### Testing
 
 ```bash
-# Basic functionality test
-python test/test_torch_load.py
+# Basic functionality test with virtual environment
+venv/bin/python test/test_torch_load.py
+
+# Test through the scheduler (recommended)
+# 1. Start master and node first, then:
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
 
 # Run test suite
-python test/run_tests.py
+venv/bin/python test/run_tests.py
 ```
+
+### Quick Test Procedure
+
+**Verified working setup:**
+
+1. **Start the system:**
+```bash
+# Terminal 1
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+
+# Terminal 2  
+venv/bin/python src/mgpu_simple_node.py --node-id node001 --master-host 127.0.0.1 --master-port 8080
+```
+
+2. **Test PyTorch functionality:**
+```bash
+# Terminal 3
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
+```
+
+3. **Verify output includes:**
+   - PyTorch version and CUDA availability
+   - GPU device information
+   - Successful completion of all test phases
 
 ## Troubleshooting
 
