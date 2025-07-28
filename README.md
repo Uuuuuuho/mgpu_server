@@ -331,14 +331,79 @@ venv/bin/python src/mgpu_simple_client.py cancel <job_id>
 
 ### Advanced: Multi-node Jobs
 
-**Only if you have set up node agents on multiple machines:**
+**다른 노드의 GPU에 job 요청하는 방법:**
 
+#### 1. 자동 스케줄링 (추천)
+마스터 서버가 자동으로 사용 가능한 GPU에 할당:
 ```bash
-# Submit job to specific node
+# 단일 GPU job - 자동으로 가장 사용 가능한 노드에 할당
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 "venv/bin/python script.py"
+
+# 다중 GPU job - 여러 노드에 자동 분산
+venv/bin/python src/mgpu_simple_client.py submit --gpus 4 "venv/bin/python distributed_training.py"
+
+# 인터랙티브 모드로 다른 노드에서 실행
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
+```
+
+#### 2. 특정 노드/GPU 지정 (고급 사용자)
+```bash
+# 특정 노드의 특정 GPU에 job 제출
 venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --node-gpu-ids "node001:0" "venv/bin/python script.py"
 
-# Multi-node distributed job
+# 특정 노드의 여러 GPU 사용
+venv/bin/python src/mgpu_simple_client.py submit --gpus 2 --node-gpu-ids "node001:0,1" "venv/bin/python multi_gpu_script.py"
+
+# 여러 노드에 걸친 분산 job
 venv/bin/python src/mgpu_simple_client.py submit --gpus 4 --node-gpu-ids "node001:0,1;node002:0,1" "venv/bin/python distributed_training.py"
+
+# 특정 노드에서 인터랙티브 실행
+venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive --node-gpu-ids "node002:0" "venv/bin/python debug_script.py"
+```
+
+#### 3. 실제 멀티노드 설정 예시
+
+**마스터 노드 (192.168.1.100):**
+```bash
+# 마스터 서버 시작 - 모든 네트워크 인터페이스에서 수신
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+```
+
+**워커 노드들:**
+```bash
+# 노드 1 (192.168.1.101)
+venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node001
+
+# 노드 2 (192.168.1.102) 
+venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node002
+
+# 노드 3 (192.168.1.103)
+venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node003
+```
+
+**클라이언트에서 job 제출:**
+```bash
+# 어느 머신에서든 마스터 서버에 연결하여 job 제출 가능
+venv/bin/python src/mgpu_simple_client.py --host 192.168.1.100 --port 8080 submit --gpus 2 "venv/bin/python distributed_script.py"
+
+# 특정 노드 지정
+venv/bin/python src/mgpu_simple_client.py --host 192.168.1.100 --port 8080 submit --gpus 1 --node-gpu-ids "node002:0" "venv/bin/python script.py"
+```
+
+#### 4. 노드 상태 확인
+```bash
+# 모든 노드와 GPU 상태 확인
+venv/bin/python src/mgpu_simple_client.py --host 192.168.1.100 --port 8080 queue
+
+# 출력 예시:
+# Jobs:
+#   F68FAFEC: running on node002:gpu0
+#   A23B4C5D: queued (waiting for 2 GPUs)
+# 
+# Nodes:
+#   node001: 2 GPUs (1 free, 1 busy)
+#   node002: 1 GPU (0 free, 1 busy) 
+#   node003: 4 GPUs (4 free, 0 busy)
 ```
 
 ## Command Reference
