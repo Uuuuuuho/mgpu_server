@@ -518,28 +518,184 @@ venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bi
 
 ## Troubleshooting
 
-### Common Issues
+### Node 연결 문제 진단
+
+**다른 노드에서 연결이 안될 때 단계별 확인 방법:**
+
+#### 1. 마스터 서버 상태 확인 (마스터 노드에서)
+```bash
+# 마스터 서버 프로세스 확인
+ps aux | grep mgpu_simple_master
+
+# 포트 바인딩 확인 - 0.0.0.0:8080 으로 바인딩되어야 함
+netstat -tlnp | grep 8080
+# 또는
+ss -tlnp | grep 8080
+
+# 기대하는 출력: tcp 0 0 0.0.0.0:8080 0.0.0.0:* LISTEN
+# 만약 127.0.0.1:8080 으로만 바인딩되어 있다면 외부 연결 불가
+```
+
+#### 2. 네트워크 연결 테스트 (워커 노드에서)
+```bash
+# 마스터 노드 ping 테스트
+ping -c 3 192.168.1.100
+
+# 포트 연결 테스트
+telnet 192.168.1.100 8080
+# 또는
+nc -v 192.168.1.100 8080
+
+# 성공시: Connected to 192.168.1.100
+# 실패시: Connection refused / Connection timed out
+```
+
+#### 3. 방화벽 확인
+**마스터 노드에서:**
+```bash
+# Ubuntu/Debian
+sudo ufw status
+sudo ufw allow 8080
+
+# CentOS/RHEL/Rocky
+sudo firewall-cmd --list-all
+sudo firewall-cmd --permanent --add-port=8080/tcp
+sudo firewall-cmd --reload
+
+# 방화벽 완전 비활성화 (테스트용)
+sudo ufw disable  # Ubuntu
+sudo systemctl stop firewalld  # CentOS
+```
+
+#### 4. 마스터 서버 재시작 (올바른 바인딩으로)
+```bash
+# 잘못된 시작 (외부 연결 불가)
+venv/bin/python src/mgpu_simple_master.py --host 127.0.0.1 --port 8080
+
+# 올바른 시작 (모든 인터페이스에서 수신)
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+```
+
+#### 5. 노드 에이전트 연결 테스트
+**워커 노드에서:**
+```bash
+# 상세한 오류 메시지와 함께 노드 에이전트 시작
+venv/bin/python src/mgpu_simple_node.py \
+  --master-host 192.168.1.100 \
+  --master-port 8080 \
+  --node-id node001 \
+  --verbose
+
+# 연결 성공시: "Connected to master server"
+# 연결 실패시: "Connection refused" 또는 "Connection timeout"
+```
+
+#### 6. 네트워크 경로 및 라우팅 확인
+```bash
+# 라우팅 테이블 확인
+ip route
+
+# 특정 IP로의 경로 추적
+traceroute 192.168.1.100
+
+# 네트워크 인터페이스 확인
+ip addr show
+```
+
+#### 7. 포트 스캔으로 서비스 확인
+```bash
+# nmap으로 마스터 노드 포트 확인
+nmap -p 8080 192.168.1.100
+
+# 출력 예시:
+# 8080/tcp open  http-proxy  (연결 가능)
+# 8080/tcp filtered http-proxy  (방화벽 차단)
+# 8080/tcp closed http-proxy  (서비스 미실행)
+```
+
+#### 8. 로그 및 오류 메시지 확인
+```bash
+# 마스터 서버 로그 (터미널에서 확인)
+# 노드 연결시 보이는 상세 메시지:
+# 🔗 Node node001 connected from 192.168.1.101:8081
+#    └─ 🎮 2 GPU(s) detected:
+#       ├─ GPU 0: NVIDIA GeForce RTX 3060 (12288 MB)
+#       ├─ GPU 1: NVIDIA GeForce RTX 4090 (24576 MB)
+
+# 노드 에이전트 로그 (각 워커 노드에서)
+# ✅ Registration successful
+# Simple Node Agent node001 started on 0.0.0.0:8081
+
+# 노드 에이전트 오류 메시지 확인
+# - "Connection refused": 마스터 서버 미실행 또는 포트 문제
+# - "No route to host": 네트워크 연결 문제
+# - "Connection timed out": 방화벽 또는 네트워크 지연
+# - "Registration failed": 마스터 서버 연결은 되지만 등록 실패
+```
+
+#### 9. 단계별 문제 해결
+```bash
+# Step 1: 마스터 서버 올바른 시작
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+
+# Step 2: 방화벽 설정 (마스터 노드)
+sudo ufw allow 8080
+
+# Step 3: 연결 테스트 (워커 노드)
+telnet 192.168.1.100 8080
+
+# Step 4: 노드 에이전트 시작 (워커 노드)
+venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node001
+
+# Step 5: 연결 확인 (어느 노드에서든)
+venv/bin/python src/mgpu_simple_client.py --host 192.168.1.100 --port 8080 queue
+```
+
+#### 10. 일반적인 오류 메시지와 해결책
+```bash
+# "Connection refused"
+→ 마스터 서버가 실행되지 않았거나 잘못된 바인딩
+→ 해결: --host 0.0.0.0 으로 마스터 서버 재시작
+
+# "No route to host"
+→ 네트워크 설정 문제 또는 IP 주소 오류
+→ 해결: ping 테스트 및 네트워크 설정 확인
+
+# "Connection timed out"
+→ 방화벽이 포트를 차단하고 있음
+→ 해결: 방화벽에서 8080 포트 허용
+
+# "Name or service not known"
+→ 호스트명 해석 실패
+→ 해결: IP 주소 직접 사용 또는 /etc/hosts 설정
+```
+
+### 기타 일반적인 문제들
 
 1. **Server won't start**
-   - Check if port 8080 is available
-   - Verify configuration file syntax
-   - Check Python dependencies
+   - Check if port 8080 is available: `netstat -tlnp | grep 8080`
+   - Verify Python environment: `which python`
+   - Check dependencies: `pip list | grep -i yaml`
 
 2. **Jobs not running**
-   - Verify GPU availability
-   - Check CUDA installation
-   - Review server logs
+   - Verify GPU availability: `nvidia-smi`
+   - Check CUDA installation: `nvcc --version`
+   - Check node registration: `venv/bin/python src/mgpu_simple_client.py queue`
 
-3. **Connection errors**
-   - Ensure master server is running
-   - Check firewall settings
-   - Verify network connectivity
+3. **Virtual environment issues**
+   - Ensure same venv path on all nodes
+   - Check PyTorch installation consistency
+   - Verify CUDA libraries availability
 
 ### Debug Mode
 
 Enable detailed logging:
 ```bash
-python src/mgpu_master_server.py --config cluster_config.yaml --debug
+# For current working implementation
+venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080 --verbose
+
+# Add verbose output to node agent
+venv/bin/python src/mgpu_simple_node.py --master-host IP --master-port 8080 --node-id nodeXXX --verbose
 ```
 
 ## Migration Guide

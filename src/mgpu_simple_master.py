@@ -84,7 +84,8 @@ class SimpleMaster:
         """Add a node to the cluster"""
         with self.lock:
             self.nodes[node_id] = NodeInfo(node_id, host, port, gpu_count)
-            logger.info(f"Added node {node_id} with {gpu_count} GPUs at {host}:{port}")
+            # Note: Detailed logging is now handled in handle_node_register
+            logger.info(f"Node {node_id} added to cluster (total nodes: {len(self.nodes)})")
     
     def handle_submit(self, request: Dict) -> Dict:
         """Handle job submission"""
@@ -215,6 +216,38 @@ class SimpleMaster:
                 
         except Exception as e:
             logger.error(f"Node status error: {e}")
+            return {'status': 'error', 'message': str(e)}
+    
+    def handle_node_register(self, request: Dict) -> Dict:
+        """Handle node registration"""
+        try:
+            node_id = request.get('node_id')
+            host = request.get('host', '127.0.0.1')
+            port = request.get('port', 8081)
+            gpu_count = request.get('gpu_count', 1)
+            gpu_info = request.get('gpu_info', [])  # Optional detailed GPU info
+            
+            if not node_id:
+                return {'status': 'error', 'message': 'node_id required'}
+            
+            # Add or update node
+            self.add_node(node_id, host, port, gpu_count)
+            
+            # Enhanced logging with GPU information
+            if gpu_info:
+                logger.info(f"🔗 Node {node_id} connected from {host}:{port}")
+                logger.info(f"   └─ 🎮 {gpu_count} GPU(s) detected:")
+                for i, gpu in enumerate(gpu_info):
+                    gpu_name = gpu.get('name', 'Unknown GPU')
+                    gpu_memory = gpu.get('memory', 'Unknown')
+                    logger.info(f"      ├─ GPU {i}: {gpu_name} ({gpu_memory})")
+            else:
+                logger.info(f"🔗 Node {node_id} connected from {host}:{port} with {gpu_count} GPU(s)")
+            
+            return {'status': 'ok', 'message': f'Node {node_id} registered successfully'}
+            
+        except Exception as e:
+            logger.error(f"Node registration error: {e}")
             return {'status': 'error', 'message': str(e)}
     
     def send_to_node(self, node_id: str, message: Dict) -> Optional[Dict]:
@@ -536,6 +569,10 @@ class SimpleMaster:
                 
             elif cmd == 'node_status':
                 response = self.handle_node_status(request)
+                client_socket.send(json.dumps(response).encode())
+                
+            elif cmd == 'node_register':
+                response = self.handle_node_register(request)
                 client_socket.send(json.dumps(response).encode())
                 
             elif cmd == 'job_complete':

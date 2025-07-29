@@ -45,6 +45,81 @@ class SimpleNode:
         self.lock = threading.RLock()
         self.running = False
         
+    def get_gpu_info(self) -> List[Dict]:
+        """Get detailed GPU information using nvidia-smi"""
+        try:
+            import subprocess
+            import json
+            
+            # Try to get GPU info from nvidia-smi
+            result = subprocess.run([
+                'nvidia-smi', '--query-gpu=name,memory.total', 
+                '--format=csv,noheader,nounits'
+            ], capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                gpu_info = []
+                lines = result.stdout.strip().split('\n')
+                for i, line in enumerate(lines[:self.gpu_count]):
+                    if line.strip():
+                        parts = line.split(', ')
+                        if len(parts) >= 2:
+                            name = parts[0].strip()
+                            memory = f"{parts[1].strip()} MB"
+                            gpu_info.append({
+                                'id': i,
+                                'name': name,
+                                'memory': memory
+                            })
+                        else:
+                            gpu_info.append({
+                                'id': i,
+                                'name': 'Unknown GPU',
+                                'memory': 'Unknown'
+                            })
+                return gpu_info
+            else:
+                # Fallback if nvidia-smi fails
+                return [{'id': i, 'name': 'GPU', 'memory': 'Unknown'} for i in range(self.gpu_count)]
+                
+        except Exception as e:
+            logger.warning(f"Could not get GPU info: {e}")
+            return [{'id': i, 'name': 'GPU', 'memory': 'Unknown'} for i in range(self.gpu_count)]
+    
+    def register_with_master(self) -> bool:
+        """Register this node with the master server"""
+        try:
+            gpu_info = self.get_gpu_info()
+            
+            register_request = {
+                'cmd': 'node_register',
+                'node_id': self.node_id,
+                'host': self.host,
+                'port': self.port,
+                'gpu_count': self.gpu_count,
+                'gpu_info': gpu_info
+            }
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10.0)
+            sock.connect((self.master_host, self.master_port))
+            sock.send(json.dumps(register_request).encode())
+            
+            response_data = sock.recv(8192).decode()
+            response = json.loads(response_data)
+            sock.close()
+            
+            if response.get('status') == 'ok':
+                logger.info(f"Successfully registered with master server")
+                return True
+            else:
+                logger.error(f"Registration failed: {response.get('message', 'Unknown error')}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to register with master: {e}")
+            return False
+        
     def get_gpu_utilization(self, gpu_id: int) -> float:
         """Get GPU utilization (simplified - returns 0 if available)"""
         try:
@@ -587,12 +662,7 @@ class SimpleNode:
         """Start the node agent"""
         self.running = True
         
-        # Start heartbeat thread
-        heartbeat_thread = threading.Thread(target=self.send_heartbeat)
-        heartbeat_thread.daemon = True
-        heartbeat_thread.start()
-        
-        # Start server
+        # Start server first
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_socket.bind((self.host, self.port))
@@ -601,6 +671,18 @@ class SimpleNode:
         logger.info(f"Simple Node Agent {self.node_id} started on {self.host}:{self.port}")
         logger.info(f"Master server: {self.master_host}:{self.master_port}")
         logger.info(f"Available GPUs: {self.available_gpus}")
+        
+        # Register with master server
+        logger.info("Registering with master server...")
+        if self.register_with_master():
+            logger.info("✅ Registration successful")
+        else:
+            logger.warning("⚠️  Registration failed, but continuing to serve requests")
+        
+        # Start heartbeat thread
+        heartbeat_thread = threading.Thread(target=self.send_heartbeat)
+        heartbeat_thread.daemon = True
+        heartbeat_thread.start()
         
         try:
             while self.running:
