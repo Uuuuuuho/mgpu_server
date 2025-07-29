@@ -35,6 +35,7 @@ class SimpleJob:
     exit_code: Optional[int] = None
     assigned_node: Optional[str] = None
     assigned_gpus: Optional[List[int]] = None
+    retry_count: int = 0  # Track retry attempts
 
     def to_dict(self):
         """Convert to dictionary for JSON serialization"""
@@ -51,7 +52,8 @@ class SimpleJob:
             'end_time': self.end_time,
             'exit_code': self.exit_code,
             'assigned_node': self.assigned_node,
-            'assigned_gpus': self.assigned_gpus
+            'assigned_gpus': self.assigned_gpus,
+            'retry_count': self.retry_count
         }
 
 class NodeInfo:
@@ -90,6 +92,9 @@ class SimpleMaster:
     def handle_submit(self, request: Dict) -> Dict:
         """Handle job submission"""
         try:
+            # Debug: log the received request
+            logger.info(f"Received submit request: {request}")
+            
             # Create job
             job = SimpleJob(
                 id=request.get('job_id', str(uuid.uuid4())[:8].upper()),
@@ -100,6 +105,9 @@ class SimpleMaster:
                 priority=request.get('priority', 0),
                 interactive=request.get('interactive', False)
             )
+            
+            # Debug: log the parsed job
+            logger.info(f"Created job {job.id} with node_gpu_ids: {job.node_gpu_ids}")
             
             # Add to queue
             self.job_queue.put(job)
@@ -233,6 +241,11 @@ class SimpleMaster:
             # Add or update node
             self.add_node(node_id, host, port, gpu_count)
             
+            # Reset failure count on successful registration
+            if node_id in self.nodes:
+                self.nodes[node_id].failure_count = 0
+                logger.info(f"Node {node_id} health status reset")
+            
             # Enhanced logging with GPU information
             if gpu_info:
                 logger.info(f"🔗 Node {node_id} connected from {host}:{port}")
@@ -265,30 +278,156 @@ class SimpleMaster:
             response = sock.recv(8192).decode()
             sock.close()
             
+            # Reset failure count on successful communication
+            if not hasattr(node, 'failure_count'):
+                node.failure_count = 0
+            else:
+                node.failure_count = 0
+            
             return json.loads(response) if response else None
             
         except Exception as e:
             logger.error(f"Failed to send to node {node_id}: {e}")
+            
+            # Track failure count
+            if not hasattr(node, 'failure_count'):
+                node.failure_count = 1
+            else:
+                node.failure_count += 1
+            
+            logger.warning(f"Node {node_id} failure count: {node.failure_count}")
+            
+            # Mark node as unhealthy after 3 failures
+            if node.failure_count >= 3:
+                logger.error(f"Node {node_id} marked as unhealthy after {node.failure_count} failures")
+            
             return None
     
     def find_available_node(self, job: SimpleJob) -> Optional[str]:
         """Find available node for job"""
         with self.lock:
+            logger.info(f"Finding node for job {job.id}, node_gpu_ids: {job.node_gpu_ids}")
+            
             # If specific node-gpu mapping is requested
             if job.node_gpu_ids:
+                logger.info(f"Specific node requested: {job.node_gpu_ids}")
                 for node_id, gpu_list in job.node_gpu_ids.items():
+                    logger.info(f"Checking node {node_id} with GPUs {gpu_list}")
                     if node_id in self.nodes:
                         node = self.nodes[node_id]
+                        
+                        # Check if node is healthy (not too many failures)
+                        if hasattr(node, 'failure_count') and node.failure_count >= 3:
+                            logger.warning(f"❌ Node {node_id} marked as unhealthy (failures: {node.failure_count})")
+                            continue
+                            
+                        logger.info(f"Node {node_id} available GPUs: {node.available_gpus}")
                         if all(gpu in node.available_gpus for gpu in gpu_list):
+                            logger.info(f"✅ Node {node_id} selected for job {job.id}")
                             return node_id
-                return None
-            
+                        else:
+                            logger.info(f"❌ Node {node_id} doesn't have required GPUs {gpu_list}")
+                    else:
+                        logger.info(f"❌ Node {node_id} not found in cluster")
+                
+                # If specific node failed, try auto-selection as fallback
+                logger.warning(f"❌ Specific node request failed. Trying auto-selection as fallback...")
+                
             # Find any node with enough GPUs
+            logger.info(f"Auto-selecting node with {job.gpus_needed} GPUs")
             for node_id, node in self.nodes.items():
+                # Check if node is healthy
+                if hasattr(node, 'failure_count') and node.failure_count >= 3:
+                    logger.warning(f"Skipping unhealthy node {node_id} (failures: {node.failure_count})")
+                    continue
+                    
                 if len(node.available_gpus) >= job.gpus_needed:
+                    logger.info(f"✅ Node {node_id} auto-selected for job {job.id}")
                     return node_id
             
+            logger.info(f"❌ No available node found")
             return None
+    
+    def create_debug_command(self, original_cmd: str, node_id: str, job_id: str) -> str:
+        """Create command with debug information to track actual execution location"""
+        debug_prefix = f'''echo "=== JOB EXECUTION DEBUG INFO ==="
+echo "Job ID: {job_id}"
+echo "Target Node ID: {node_id}"
+echo "Actual Hostname: $(hostname)"
+echo "Actual IP: $(hostname -I | cut -d' ' -f1 || echo 'N/A')"
+echo "Process ID: $$"
+echo "Working Directory: $(pwd)"
+echo "Timestamp: $(date)"
+echo "Port Check: $(netstat -tlnp 2>/dev/null | grep :808 | head -3 || echo 'No 808x ports')"
+echo "=============================="
+'''
+        return f"{debug_prefix}\n{original_cmd}"
+    
+    def get_node_health_status(self, node_id: str) -> Dict[str, Any]:
+        """Get comprehensive health status of a node"""
+        if node_id not in self.nodes:
+            return {'status': 'not_found', 'healthy': False}
+        
+        node = self.nodes[node_id]
+        current_time = time.time()
+        
+        # Calculate health metrics
+        failure_count = getattr(node, 'failure_count', 0)
+        last_heartbeat = getattr(node, 'last_heartbeat', 0)
+        time_since_heartbeat = current_time - last_heartbeat
+        
+        # Determine health status
+        is_healthy = (
+            failure_count < 3 and 
+            time_since_heartbeat < 300  # 5 minutes
+        )
+        
+        return {
+            'status': 'healthy' if is_healthy else 'unhealthy',
+            'healthy': is_healthy,
+            'failure_count': failure_count,
+            'time_since_heartbeat': time_since_heartbeat,
+            'available_gpus': node.available_gpus,
+            'running_jobs': len(node.running_jobs),
+            'last_heartbeat_iso': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_heartbeat))
+        }
+    
+    def diagnose_scheduling_issue(self, job: SimpleJob) -> Dict[str, Any]:
+        """Diagnose why a job cannot be scheduled"""
+        diagnosis = {
+            'job_id': job.id,
+            'requested_gpus': job.gpus_needed,
+            'requested_nodes': job.node_gpu_ids,
+            'available_nodes': {},
+            'recommendations': []
+        }
+        
+        # Check each node
+        for node_id, node in self.nodes.items():
+            health = self.get_node_health_status(node_id)
+            diagnosis['available_nodes'][node_id] = health
+            
+            if not health['healthy']:
+                if health['failure_count'] >= 3:
+                    diagnosis['recommendations'].append(f"Node {node_id}: Too many failures, consider restarting")
+                if health['time_since_heartbeat'] > 300:
+                    diagnosis['recommendations'].append(f"Node {node_id}: No recent heartbeat, check connectivity")
+        
+        # Check if specific node requirements can be met
+        if job.node_gpu_ids:
+            for node_id, requested_gpus in job.node_gpu_ids.items():
+                if node_id not in self.nodes:
+                    diagnosis['recommendations'].append(f"Requested node {node_id} does not exist")
+                else:
+                    node = self.nodes[node_id]
+                    available = set(node.available_gpus)
+                    requested = set(requested_gpus)
+                    if not requested.issubset(available):
+                        diagnosis['recommendations'].append(
+                            f"Node {node_id}: Requested GPUs {requested_gpus} not available. Available: {list(available)}"
+                        )
+        
+        return diagnosis
     
     def schedule_jobs(self):
         """Job scheduler thread"""
@@ -318,11 +457,14 @@ class SimpleMaster:
                         job.assigned_gpus = assigned_gpus
                         job.start_time = time.time()
                         
+                        # Create debug-enhanced command
+                        debug_command = self.create_debug_command(job.cmd, node_id, job.id)
+                        
                         # Send to node
                         node_message = {
                             'cmd': 'run',
                             'job_id': job.id,
-                            'command': job.cmd,
+                            'command': debug_command,
                             'gpus': assigned_gpus,
                             'interactive': job.interactive
                         }
@@ -332,16 +474,50 @@ class SimpleMaster:
                             self.running_jobs[job.id] = job
                             logger.info(f"Job {job.id} started on {node_id} with GPUs {assigned_gpus}")
                         else:
-                            # Restore GPUs and requeue
+                            # Restore GPUs and handle retry logic
                             for gpu in assigned_gpus:
                                 node.available_gpus.append(gpu)
-                            job.status = 'queued'
-                            self.job_queue.put(job)
-                            logger.error(f"Failed to start job {job.id} on {node_id}")
+                            
+                            job.retry_count += 1
+                            logger.error(f"Failed to start job {job.id} on {node_id} (attempt {job.retry_count})")
+                            
+                            # Check retry limit
+                            if job.retry_count >= 5:  # Maximum 5 retries
+                                job.status = 'failed'
+                                job.exit_code = -1
+                                job.end_time = time.time()
+                                self.completed_jobs[job.id] = job
+                                logger.error(f"Job {job.id} failed after {job.retry_count} attempts")
+                            else:
+                                job.status = 'queued'
+                                self.job_queue.put(job)
+                                # Add exponential backoff delay
+                                time.sleep(min(2 ** job.retry_count, 30))  # Max 30 seconds delay
                     else:
-                        # No available resources, put back in queue
-                        self.job_queue.put(job)
-                        time.sleep(1.0)
+                        # No available resources, increment retry count for resource constraints
+                        job.retry_count += 1
+                        
+                        # Generate diagnosis for debugging
+                        if job.retry_count % 5 == 0:  # Every 5th retry, generate diagnosis
+                            diagnosis = self.diagnose_scheduling_issue(job)
+                            logger.warning(f"Scheduling diagnosis for job {job.id}:")
+                            logger.warning(f"  Recommendations: {diagnosis['recommendations']}")
+                            for node_id, health in diagnosis['available_nodes'].items():
+                                logger.warning(f"  Node {node_id}: {health['status']} (failures: {health['failure_count']})")
+                        
+                        if job.retry_count >= 10:  # Higher limit for resource issues
+                            job.status = 'failed'
+                            job.exit_code = -2  # Resource unavailable
+                            job.end_time = time.time()
+                            self.completed_jobs[job.id] = job
+                            
+                            # Final diagnosis
+                            final_diagnosis = self.diagnose_scheduling_issue(job)
+                            logger.error(f"Job {job.id} failed - no resources available after {job.retry_count} attempts")
+                            logger.error(f"Final diagnosis: {final_diagnosis['recommendations']}")
+                        else:
+                            self.job_queue.put(job)
+                            time.sleep(1.0)
                 else:
                     time.sleep(0.5)
                     
