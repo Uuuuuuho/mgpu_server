@@ -15,9 +15,9 @@ echo "[INFO] Building modular Multi-GPU Scheduler components..."
 
 # List of files to build with their target names
 declare -A build_files=(
-    ["src/mgpu_master_new.py"]="mgpu_master"
-    ["src/mgpu_node_new.py"]="mgpu_node" 
-    ["src/mgpu_client_new.py"]="mgpu_client"
+    ["src/mgpu_master.py"]="mgpu_master"
+    ["src/mgpu_node.py"]="mgpu_node"
+    ["src/mgpu_client.py"]="mgpu_client"
     ["src/mgpu_queue.py"]="mgpu_queue"
     ["src/mgpu_cancel.py"]="mgpu_cancel"
     ["src/mgpu_srun.py"]="mgpu_srun"
@@ -96,16 +96,16 @@ src/
 │   └── job_client.py    # Job submission and monitoring
 ├── mgpu_node/           # Node agent components
 │   └── node_agent.py    # Node job execution
-├── mgpu_master_new.py   # Master server entry point
-├── mgpu_node_new.py     # Node agent entry point
-└── mgpu_client_new.py   # Client entry point
+├── mgpu_master.py       # Master server entry point
+├── mgpu_node.py         # Node agent entry point
+└── mgpu_client.py       # Client entry point
 
 === FEATURES ===
-✅ Single Responsibility Principle - Each class has one purpose
-✅ Modular Architecture - Clean separation of concerns  
-✅ Automatic IP Detection - Nodes register with actual IPs
-✅ Enhanced Debugging - Detailed execution tracking
-✅ Improved Error Handling - Robust network communication
-✅ Timeout Management - Configurable timeouts for all operations
+- Single Responsibility Principle - Each class has one purpose
+- Modular Architecture - Clean separation of concerns  
+- Automatic IP Detection - Nodes register with actual IPs
+- Enhanced Debugging - Detailed execution tracking
+- Improved Error Handling - Robust network communication
+- Timeout Management - Configurable timeouts for all operations
 
 EOF
