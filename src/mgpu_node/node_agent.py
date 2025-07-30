@@ -9,6 +9,8 @@ import json
 import time
 import os
 import sys
+import signal
+import psutil
 from typing import Dict, List, Optional, Any
 
 # Add src directory to path
@@ -44,6 +46,86 @@ class NodeAgent:
     def get_actual_ip_address(self) -> str:
         """Get actual IP address using multiple detection methods"""
         return IPManager.get_actual_ip_address(self.master_host, self.master_port)
+    
+    def terminate_process_tree(self, process: subprocess.Popen, timeout: int = 10) -> bool:
+        """Terminate process and all its children"""
+        try:
+            # Get process group ID
+            pgid = os.getpgid(process.pid)
+            
+            # Try to terminate the entire process group gracefully
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+                logger.info(f"Sent SIGTERM to process group {pgid}")
+                
+                # Wait for processes to terminate
+                try:
+                    process.wait(timeout=timeout)
+                    logger.info(f"Process group {pgid} terminated gracefully")
+                    return True
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Process group {pgid} did not terminate within {timeout}s, forcing kill")
+                    
+            except ProcessLookupError:
+                logger.info(f"Process group {pgid} already terminated")
+                return True
+            
+            # If graceful termination failed, force kill the entire process group
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+                logger.info(f"Sent SIGKILL to process group {pgid}")
+                
+                # Final wait
+                try:
+                    process.wait(timeout=5)
+                    logger.info(f"Process group {pgid} killed successfully")
+                    return True
+                except subprocess.TimeoutExpired:
+                    logger.error(f"Failed to kill process group {pgid}")
+                    return False
+                    
+            except ProcessLookupError:
+                logger.info(f"Process group {pgid} already killed")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error terminating process tree: {e}")
+            
+            # Fallback: try psutil for more robust process tree termination
+            try:
+                parent = psutil.Process(process.pid)
+                children = parent.children(recursive=True)
+                
+                # Terminate children first
+                for child in children:
+                    try:
+                        child.terminate()
+                    except psutil.NoSuchProcess:
+                        pass
+                
+                # Terminate parent
+                try:
+                    parent.terminate()
+                except psutil.NoSuchProcess:
+                    pass
+                
+                # Wait for termination
+                gone, alive = psutil.wait_procs(children + [parent], timeout=timeout)
+                
+                # Force kill remaining processes
+                for proc in alive:
+                    try:
+                        proc.kill()
+                        logger.info(f"Force killed process {proc.pid}")
+                    except psutil.NoSuchProcess:
+                        pass
+                
+                logger.info(f"Process tree terminated using psutil")
+                return True
+                
+            except Exception as fallback_error:
+                logger.error(f"Fallback process termination failed: {fallback_error}")
+                return False
     
     def register_with_master(self) -> bool:
         """Register this node with the master server"""
@@ -122,6 +204,7 @@ class NodeAgent:
                     env['CUDA_VISIBLE_DEVICES'] = ''
                 
                 # Start process with output capture for all jobs
+                # Create new process group for proper cleanup
                 process = subprocess.Popen(
                     command,
                     shell=True,
@@ -131,7 +214,8 @@ class NodeAgent:
                     stdin=subprocess.PIPE if interactive else None,
                     bufsize=1,
                     universal_newlines=True,
-                    text=True
+                    text=True,
+                    preexec_fn=os.setsid  # Create new process group
                 )
                 
                 # Store job
@@ -170,12 +254,13 @@ class NodeAgent:
                 
                 job_process = self.running_jobs[job_id]
                 
-                # Terminate process
-                try:
-                    job_process.process.terminate()
-                    job_process.process.wait(timeout=10)
-                except:
-                    job_process.process.kill()
+                # Terminate process tree completely
+                logger.info(f"Terminating process tree for job {job_id}")
+                success = self.terminate_process_tree(job_process.process, timeout=15)
+                
+                if not success:
+                    logger.error(f"Failed to properly terminate process tree for job {job_id}")
+                    # Still continue with cleanup as the process might be partially terminated
                 
                 # Restore GPUs
                 for gpu in job_process.gpus:

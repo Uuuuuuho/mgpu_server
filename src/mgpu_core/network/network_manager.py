@@ -15,11 +15,12 @@ class NetworkManager:
     """Handles network communication with timeout and error handling"""
     
     @staticmethod
-    def connect_to_server(host: str, port: int, timeout: float = 10.0) -> Optional[socket.socket]:
+    def connect_to_server(host: str, port: int, timeout: Optional[float] = 10.0) -> Optional[socket.socket]:
         """Create connection to server with timeout"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
+            if timeout is not None:
+                sock.settimeout(timeout)
             sock.connect((host, port))
             return sock
         except Exception as e:
@@ -27,10 +28,11 @@ class NetworkManager:
             return None
     
     @staticmethod
-    def send_json_message(sock: socket.socket, message: Dict[str, Any], timeout: float = 10.0) -> bool:
+    def send_json_message(sock: socket.socket, message: Dict[str, Any], timeout: Optional[float] = 10.0) -> bool:
         """Send JSON message with timeout"""
         try:
-            sock.settimeout(timeout)
+            if timeout is not None:
+                sock.settimeout(timeout)
             data = json.dumps(message).encode()
             sock.send(data)
             return True
@@ -39,10 +41,11 @@ class NetworkManager:
             return False
     
     @staticmethod
-    def receive_json_message(sock: socket.socket, timeout: float = 10.0) -> Optional[Dict[str, Any]]:
+    def receive_json_message(sock: socket.socket, timeout: Optional[float] = 10.0) -> Optional[Dict[str, Any]]:
         """Receive JSON message with timeout"""
         try:
-            sock.settimeout(timeout)
+            if timeout is not None:
+                sock.settimeout(timeout)
             data = sock.recv(8192).decode()
             if not data:
                 return None

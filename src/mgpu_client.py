@@ -46,10 +46,10 @@ def main():
     submit_parser.add_argument('--gpus', type=int, default=1, help='Number of GPUs needed')
     submit_parser.add_argument('--interactive', action='store_true', help='Interactive session')
     submit_parser.add_argument('--node-gpu-ids', help='Specific node-GPU mapping (e.g., node1:0,1;node2:2)')
-    submit_parser.add_argument('--session-timeout', type=int, default=7200, help='Session timeout in seconds')
-    submit_parser.add_argument('--connection-timeout', type=int, default=30, help='Connection timeout in seconds')
-    submit_parser.add_argument('--max-wait-time', type=int, default=300, help='Maximum wait time for job output')
-    submit_parser.add_argument('--max-consecutive-timeouts', type=int, default=30, help='Maximum consecutive timeouts')
+    submit_parser.add_argument('--session-timeout', type=int, help='Session timeout in seconds (no limit if not specified)')
+    submit_parser.add_argument('--connection-timeout', type=int, help='Connection timeout in seconds (no limit if not specified)')
+    submit_parser.add_argument('--max-wait-time', type=int, help='Maximum wait time for job output (no limit if not specified)')
+    submit_parser.add_argument('--max-consecutive-timeouts', type=int, help='Maximum consecutive timeouts (no limit if not specified)')
     submit_parser.add_argument('cmd', help='Command to execute')
     
     # Queue command
@@ -62,7 +62,7 @@ def main():
     # Monitor command
     monitor_parser = subparsers.add_parser('monitor', help='Monitor job output')
     monitor_parser.add_argument('job_id', help='Job ID to monitor')
-    monitor_parser.add_argument('--max-wait-time', type=int, default=300, help='Maximum wait time')
+    monitor_parser.add_argument('--max-wait-time', type=int, help='Maximum wait time (no limit if not specified)')
     
     args = parser.parse_args()
     
@@ -80,13 +80,18 @@ def main():
         if args.command == 'submit':
             node_gpu_ids = parse_node_gpu_ids(args.node_gpu_ids) if args.node_gpu_ids else None
             
-            # Create timeout configuration
-            timeout_config = {
-                'session_timeout': args.session_timeout,
-                'connection_timeout': args.connection_timeout,
-                'max_wait_time': args.max_wait_time,
-                'max_consecutive_timeouts': args.max_consecutive_timeouts
-            }
+            # Create timeout configuration only if any timeout is specified
+            timeout_config = None
+            if any([args.session_timeout, args.connection_timeout, args.max_wait_time, args.max_consecutive_timeouts]):
+                timeout_config = {}
+                if args.session_timeout is not None:
+                    timeout_config['session_timeout'] = args.session_timeout
+                if args.connection_timeout is not None:
+                    timeout_config['connection_timeout'] = args.connection_timeout
+                if args.max_wait_time is not None:
+                    timeout_config['max_wait_time'] = args.max_wait_time
+                if args.max_consecutive_timeouts is not None:
+                    timeout_config['max_consecutive_timeouts'] = args.max_consecutive_timeouts
             
             success = client.submit_job(
                 gpus=args.gpus,
@@ -103,8 +108,9 @@ def main():
             success = client.cancel_job(args.job_id)
             
         elif args.command == 'monitor':
-            timeout_config = TimeoutConfig.get_default_config()
-            timeout_config['max_wait_time'] = args.max_wait_time
+            timeout_config = None
+            if args.max_wait_time is not None:
+                timeout_config = {'max_wait_time': args.max_wait_time}
             success = client.monitor_job_output(args.job_id, timeout_config)
         
         else:

@@ -32,8 +32,24 @@ class JobClient:
                    node_gpu_ids: Optional[Dict[str, List[int]]] = None, 
                    timeout_config: Optional[Dict[str, Any]] = None) -> bool:
         """Submit a job to the scheduler"""
+        # If no timeout config provided, use no timeouts (None for unlimited)
         if timeout_config is None:
-            timeout_config = TimeoutConfig.get_default_config()
+            timeout_config = {
+                'session_timeout': None,
+                'connection_timeout': None,
+                'max_wait_time': None,
+                'max_consecutive_timeouts': None
+            }
+        else:
+            # Fill in missing timeout values with None (unlimited)
+            default_config = {
+                'session_timeout': None,
+                'connection_timeout': None,
+                'max_wait_time': None,
+                'max_consecutive_timeouts': None
+            }
+            default_config.update(timeout_config)
+            timeout_config = default_config
         
         try:
             request = {
@@ -126,8 +142,8 @@ class JobClient:
         
         try:
             while True:
-                # Check session timeout
-                if time.time() - session_start > max_session_time:
+                # Check session timeout (skip if None)
+                if max_session_time is not None and time.time() - session_start > max_session_time:
                     print(f"\nSession timed out after {max_session_time} seconds")
                     break
                 
@@ -164,7 +180,8 @@ class JobClient:
                                         
                 except socket.timeout:
                     consecutive_timeouts += 1
-                    if consecutive_timeouts >= max_consecutive_timeouts:
+                    # Skip timeout check if max_consecutive_timeouts is None
+                    if max_consecutive_timeouts is not None and consecutive_timeouts >= max_consecutive_timeouts:
                         print(f"\nNo response from server for {max_consecutive_timeouts} seconds, ending session")
                         break
                     continue
@@ -180,7 +197,12 @@ class JobClient:
     def monitor_job_output(self, job_id: str, timeout_config: Optional[Dict[str, Any]] = None) -> bool:
         """Monitor non-interactive job output"""
         if timeout_config is None:
-            timeout_config = TimeoutConfig.get_default_config()
+            timeout_config = {
+                'session_timeout': None,
+                'connection_timeout': None,
+                'max_wait_time': None,
+                'max_consecutive_timeouts': None
+            }
         
         print(f"Monitoring job {job_id} output...")
         print("=" * 50)
@@ -195,8 +217,8 @@ class JobClient:
             try:
                 current_time = time.time()
                 
-                # Check if we've exceeded maximum wait time
-                if current_time - start_time > max_wait_time:
+                # Check if we've exceeded maximum wait time (skip if None)
+                if max_wait_time is not None and current_time - start_time > max_wait_time:
                     print("=" * 50)
                     print(f"Job monitoring timed out after {max_wait_time} seconds")
                     print("The job may still be running on the server.")
@@ -343,7 +365,7 @@ class JobClient:
             sock.close()
             
             print(f"Cancel result: {response}")
-            return response and response.get('status') == 'ok'
+            return bool(response and response.get('status') == 'ok')
             
         except Exception as e:
             logger.error(f"Cancel job error: {e}")
