@@ -1,67 +1,69 @@
 # Multi-GPU Scheduler
 
-A simplified, reliable multi-GPU job scheduling system for distributed computing environments.
+A modular, reliable multi-GPU job scheduling system for distributed computing environments.
 
 ## Overview
 
-The Multi-GPU Scheduler is a lightweight job scheduling system designed to manage GPU resources efficiently. This version prioritizes **simplicity, stability, and maintainability** over complex features, providing a clean foundation for GPU resource management.
+The Multi-GPU Scheduler is a lightweight job scheduling system designed to manage GPU resources efficiently across single-node and multi-node environments. This version prioritizes **modularity, stability, and maintainability** with a clean, Single Responsibility Principle-based architecture.
 
 ## System Architecture
 
 ### Current Implementation
 
-**Note**: This system currently supports **single-node operation** with **localhost execution**. Multi-node support requires additional node agent implementation.
+The system features a **modular architecture** with clear separation of concerns:
 
-#### Available Components
+#### Core Components
 
-1. **Simple Master Server** (`mgpu_simple_master.py`)
-   - **Currently working** implementation
-   - Handles job queuing and local execution
-   - Socket-based API for client communication
-   - Supports localhost GPU allocation
+1. **mgpu_core/** - Shared foundation components
+   - **models/**: Data models (SimpleJob, NodeInfo, JobProcess, MessageType)
+   - **network/**: Network communication utilities (NetworkManager)
+   - **utils/**: System utilities (GPUManager, IPManager, TimeoutConfig, logging)
 
-2. **Simple Node Agent** (`mgpu_simple_node.py`)
-   - **Reference implementation** for remote nodes
-   - Can be deployed on compute nodes
-   - Communicates with master server
-   - **Requires manual setup** for multi-node clusters
+2. **mgpu_server/** - Master server components
+   - **job_scheduler.py**: JobScheduler class for job queue management
+   - **node_manager.py**: NodeManager class for node registration and health
+   - **master_server.py**: MasterServer class for client request handling
 
-3. **Client Interface** (`mgpu_simple_client.py`)
-   - **Currently working** command-line client
-   - Simple interface: submit, queue, cancel
-   - Works with the simple master server
+3. **mgpu_client/** - Client interface components
+   - **job_client.py**: JobClient class for job submission and monitoring
 
-#### Future Development
+4. **mgpu_node/** - Node agent components
+   - **node_agent.py**: NodeAgent class for job execution on worker nodes
 
-4. **Enhanced Master Server** (`mgpu_master_server.py`)
-   - **Under development** - simplified architecture
-   - Will replace complex legacy system
-   - Currently incomplete
+#### Entry Points
 
-5. **Enhanced Client** (`mgpu_srun_multinode.py`)
-   - **Under development** - improved interface
-   - Will provide better user experience
-   - Currently incomplete
+- **mgpu_master.py**: Master server entry point
+- **mgpu_client.py**: Client interface entry point  
+- **mgpu_node.py**: Node agent entry point
+- **mgpu_queue.py**: Queue management entry point
+- **mgpu_cancel.py**: Job cancellation entry point
 
 ## Key Features
 
-### Simplified Design Philosophy
-- **Clean codebase**: Easy to understand and maintain
+### Modular Design Philosophy
+- **Single Responsibility Principle**: Each class has one clear responsibility
+- **Clean separation**: Core, server, client, and node components are separate
 - **Minimal dependencies**: Reduces complexity and potential issues
-- **Proven patterns**: Based on working simple implementations
-- **Robust error handling**: Graceful failure recovery
+- **Robust error handling**: Graceful failure recovery with comprehensive logging
+
+### Advanced Process Management
+- **Process groups**: Jobs run in separate process groups for clean termination
+- **Signal handling**: Graceful termination with SIGTERM, force kill with SIGKILL
+- **Psutil fallback**: Comprehensive process tree cleanup
+- **Orphan prevention**: No more zombie or orphaned processes on job cancellation
 
 ### Resource Management
 - **GPU allocation**: Automatic assignment based on availability
-- **Node management**: Support for single and multi-node setups
-- **Resource cleanup**: Automatic cleanup on job completion
-- **Localhost-first**: Works out of the box on single machines
+- **Multi-node support**: Seamless operation across multiple compute nodes
+- **Resource cleanup**: Automatic cleanup on job completion or cancellation
+- **Node health monitoring**: Automatic detection of failed nodes
 
 ### Job Management
-- **Simple submission**: Submit jobs with minimal configuration
-- **Queue status**: Real-time view of job and resource status
-- **Job control**: Cancel and monitor running jobs
-- **Status tracking**: Clear job state management
+- **Flexible submission**: Submit jobs with or without timeout constraints
+- **Real-time monitoring**: Interactive and non-interactive job monitoring
+- **Queue management**: Real-time view of job and resource status
+- **Job control**: Cancel and monitor running jobs with proper cleanup
+- **Status tracking**: Clear job state management across all nodes
 
 ## Quick Start
 
@@ -69,6 +71,7 @@ The Multi-GPU Scheduler is a lightweight job scheduling system designed to manag
 
 - Python 3.7+
 - PyYAML
+- psutil (for process management)
 - Basic CUDA setup (for GPU jobs)
 
 ### Installation
@@ -84,656 +87,696 @@ pip install -r requirements.txt
 For PyTorch and GPU-enabled workloads, use a dedicated virtual environment:
 
 ```bash
-# Activate the virtual environment (example path)
-source venv/bin/activate
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
 
-# Verify PyTorch installation
+# Install requirements
+pip install -r requirements.txt
+
+# Verify PyTorch installation (if needed)
 python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.cuda.is_available()}')"
 ```
 
-**Note**: Replace `venv/bin/activate` with your actual virtual environment path.
-
 ### Basic Usage
-
-**Currently working with the simple implementation:**
 
 #### Step 1: Start the Master Server
 
 ```bash
-# Using virtual environment Python
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+# Start master server (binds to all interfaces)
+python src/mgpu_master.py --host 0.0.0.0 --port 8080
 ```
 
-#### Step 2: Start Node Agent (for multi-node or local execution)
+#### Step 2: Start Node Agents
 
 ```bash
-# Start node agent with proper node ID
-venv/bin/python src/mgpu_simple_node.py --node-id node001 --master-host 127.0.0.1 --master-port 8080
+# Start local node agent
+python src/mgpu_node.py --node-id node001 --master-host 127.0.0.1 --master-port 8080
+
+# For multi-node setup, start agents on each compute node:
+# python src/mgpu_node.py --node-id node002 --master-host <MASTER_IP> --master-port 8080
 ```
 
 #### Step 3: Submit Jobs
 
-**Interactive job with real-time output (recommended for testing):**
+**Interactive job with real-time output:**
 ```bash
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python /path/to/your_script.py"
+python src/mgpu_client.py submit --gpus 1 --interactive "python your_script.py"
 ```
 
 **Non-interactive job (background execution):**
 ```bash
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 "venv/bin/python /path/to/your_script.py"
+python src/mgpu_client.py submit --gpus 1 "python your_script.py"
 ```
 
-**Example with PyTorch test:**
+**Job with unlimited execution time:**
 ```bash
-# Interactive PyTorch test execution
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
+# No timeout constraints - job runs until completion
+python src/mgpu_client.py submit --gpus 1 "python long_running_script.py"
+```
+
+**Job with custom timeout settings:**
+```bash
+# Interactive job with custom timeouts
+python src/mgpu_client.py submit --interactive --gpus 1 \
+  --session-timeout 3600 \
+  --max-consecutive-timeouts 60 \
+  "python training_script.py"
 ```
 
 #### Step 4: Monitor and Manage Jobs
 
 ```bash
-# Check queue status
-venv/bin/python src/mgpu_simple_client.py queue
+# Check queue status and node information
+python src/mgpu_client.py queue
 
-# Cancel a job
-venv/bin/python src/mgpu_simple_client.py cancel <job_id>
+# Monitor specific job output
+python src/mgpu_client.py monitor <job_id>
+
+# Cancel a job (with proper process tree cleanup)
+python src/mgpu_client.py cancel <job_id>
 ```
 
-**Job submission with timeout options:**
-```bash
-# Interactive job with custom timeouts
-venv/bin/python src/mgpu_simple_client.py submit --interactive --gpus 1 \
-  --session-timeout 3600 \
-  --max-consecutive-timeouts 60 \
-  "venv/bin/python long_running_script.py"
+### Multi-node Setup
 
-# Non-interactive job with custom timeouts
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 \
-  --max-wait-time 600 \
-  --connection-timeout 15 \
-  "venv/bin/python batch_job.py"
+**Setting up a distributed multi-node cluster:**
+
+#### 1. Master Node Setup
+```bash
+# Start master server on the head node (replace with actual IP)
+python src/mgpu_master.py --host 0.0.0.0 --port 8080
 ```
 
-3. **Check queue status:**
+#### 2. Worker Node Setup
 ```bash
-venv/bin/python src/mgpu_simple_client.py queue
+# On each worker node, connect to the master (replace <MASTER_IP> with actual IP)
+python src/mgpu_node.py --master-host <MASTER_IP> --master-port 8080 --node-id node001
+python src/mgpu_node.py --master-host <MASTER_IP> --master-port 8080 --node-id node002
+# ... repeat for each worker node with unique node IDs
 ```
 
-4. **Cancel a job:**
+#### 3. Client Job Submission
 ```bash
-venv/bin/python src/mgpu_simple_client.py cancel <job_id>
-```
-
-### Multi-node Setup (Manual Node Connection)
-
-**How multiple nodes connect to the master server:**
-
-The current working implementation (`mgpu_simple_*`) supports multi-node setups through manual node agent deployment:
-
-1. **Start master server on the head node:**
-```bash
-# Using virtual environment with proper host binding
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
-```
-
-2. **On each worker node, connect to the master:**
-```bash
-# Replace <MASTER_IP> with actual master server IP
-venv/bin/python src/mgpu_simple_node.py --master-host <MASTER_IP> --master-port 8080 --node-id node001
-venv/bin/python src/mgpu_simple_node.py --master-host <MASTER_IP> --master-port 8080 --node-id node002
-# ... repeat for each worker node
-```
-
-3. **Submit jobs from any client:**
-```bash
-# Client can run from any machine that can reach the master
-venv/bin/python src/mgpu_simple_client.py --host <MASTER_IP> --port 8080 submit --gpus 2 "venv/bin/python distributed_script.py"
+# Submit jobs from any machine that can reach the master
+python src/mgpu_client.py --host <MASTER_IP> --port 8080 submit --gpus 2 "python distributed_script.py"
 ```
 
 **Key Points:**
-- **Node agents must be started manually** on each worker machine
-- **Master server coordinates** all GPU resources across connected nodes
-- **Automatic load balancing** - jobs are assigned to available GPUs across all connected nodes
-- **Network accessibility** - all nodes must be able to reach the master server's IP and port
-- **Virtual environment consistency** - ensure the same Python environment is available on all nodes
+- **Automatic load balancing**: Jobs are assigned to available GPUs across all connected nodes
+- **Network accessibility**: All nodes must be able to reach the master server's IP and port
+- **Environment consistency**: Ensure compatible Python environments on all nodes
+- **Shared filesystem**: Recommended for job scripts and data access
 
-### Tested Example: PyTorch GPU Workload
+### Example: Complete Multi-node Setup
 
-Here's a complete working example that has been tested:
-
-1. **Start the system:**
+**Master node (192.168.1.100):**
 ```bash
-# Terminal 1: Start master server
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
-
-# Terminal 2: Start node agent
-venv/bin/python src/mgpu_simple_node.py --node-id node001 --master-host 127.0.0.1 --master-port 8080
+# Start master server - binds to all network interfaces
+python src/mgpu_master.py --host 0.0.0.0 --port 8080
 ```
 
-2. **Submit and monitor PyTorch test:**
+**Worker nodes:**
 ```bash
-# Terminal 3: Submit interactive PyTorch test
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
+# Worker node 1 (192.168.1.101)
+python src/mgpu_node.py --master-host 192.168.1.100 --master-port 8080 --node-id worker01
+
+# Worker node 2 (192.168.1.102) 
+python src/mgpu_node.py --master-host 192.168.1.100 --master-port 8080 --node-id worker02
+
+# Worker node 3 (192.168.1.103)
+python src/mgpu_node.py --master-host 192.168.1.100 --master-port 8080 --node-id worker03
 ```
 
-**Expected output:**
-```
-Job submission: {'status': 'ok', 'job_id': 'F68FAFEC', 'message': 'Job submitted'}
-Starting interactive session...
-==================================================
-PyTorch CUDA Load Test
-Start time: 2025-07-28 22:32:49
-
-==================================================
-CUDA Environment Check
-==================================================
-PyTorch version: 2.7.1+cu126
-CUDA available: True
-CUDA version: 12.6
-Number of available GPUs: 1
-GPU 0: NVIDIA GeForce RTX 3060
-GPU 0 memory: 12.0 GB
-...
-```
-
-3. **Check system status:**
+**Client job submission from any machine:**
 ```bash
-# Check queue and node status
-venv/bin/python src/mgpu_simple_client.py queue
+# Automatic GPU allocation across available nodes
+python src/mgpu_client.py --host 192.168.1.100 --port 8080 submit --gpus 4 "python multi_gpu_training.py"
+
+# Specific node-GPU assignment
+python src/mgpu_client.py --host 192.168.1.100 --port 8080 submit --gpus 2 --node-gpu-ids "worker01:0,1" "python script.py"
+
+# Check cluster status
+python src/mgpu_client.py --host 192.168.1.100 --port 8080 queue
 ```
 
 ## Configuration
 
-### Single-node Configuration (Current)
+### Single-node Configuration
 
-For **localhost-only** operation (current working setup):
+For **localhost-only** operation (default setup):
 
-**No configuration file needed** - the simple master server works out of the box:
+**No configuration file needed** - the system works out of the box:
 
 ```bash
 # Step 1: Start master server
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+python src/mgpu_master.py --host 0.0.0.0 --port 8080
 
 # Step 2: Start local node agent
-venv/bin/python src/mgpu_simple_node.py --node-id node001 --master-host 127.0.0.1 --master-port 8080
+python src/mgpu_node.py --node-id node001 --master-host 127.0.0.1 --master-port 8080
 
 # Step 3: Submit jobs
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python your_script.py"
+python src/mgpu_client.py submit --gpus 1 --interactive "python your_script.py"
 ```
 
 The system will automatically detect available GPUs on localhost.
 
-### Multi-node Configuration (Advanced Setup)
+### Multi-node Configuration
 
-**For advanced users** wanting to set up multiple nodes:
+**For distributed clusters:**
 
-1. **Start master server on main node:**
-```bash
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
-```
+1. **Configure firewall** to allow communication on port 8080 (or your chosen port)
+2. **Ensure network connectivity** between all nodes
+3. **Verify Python environment** compatibility across nodes
+4. **Optional**: Set up shared filesystem for job scripts and data
 
-2. **Start node agents on compute nodes:**
-```bash
-# On node 1 (ensure virtual environment is available)
-venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node001
+**Network Requirements:**
+- All worker nodes must be able to connect to master server IP:port
+- Firewall rules must allow incoming connections on the master server port
+- DNS resolution or IP connectivity between nodes
 
-# On node 2  
-venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node002
-```
-
-3. **Configure firewall** to allow communication on port 8080
-
-**Important Requirements:**
-- Same virtual environment must be accessible on all nodes
-- Python executable path should be consistent: `venv/bin/python`
-- Network connectivity between all nodes
-- Shared filesystem (optional but recommended for job scripts)
+**Environment Requirements:**
+- Compatible Python versions across all nodes  
+- Required packages installed on all nodes
+- CUDA drivers and libraries available on GPU nodes
 
 ## Usage Examples
 
-### Job Submission (Current Working Commands)
+### Job Submission Options
 
 ```bash
-# Simple single-GPU job
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 "venv/bin/python train.py"
+# Simple single-GPU job (no timeout limits)
+python src/mgpu_client.py submit --gpus 1 "python train.py"
 
-# Multi-GPU job on localhost
-venv/bin/python src/mgpu_simple_client.py submit --gpus 2 "venv/bin/python distributed_train.py"
+# Multi-GPU job with automatic node allocation
+python src/mgpu_client.py submit --gpus 4 "python distributed_train.py"
 
-# Interactive job with output streaming (recommended for testing)
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python interactive_script.py"
+# Interactive job with real-time output streaming
+python src/mgpu_client.py submit --gpus 1 --interactive "python interactive_script.py"
 
-# Interactive job with custom timeouts for long-running GPU workloads
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive \
-  --session-timeout 14400 \
+# Job with custom timeout settings
+python src/mgpu_client.py submit --gpus 1 --interactive \
+  --session-timeout 3600 \
   --max-consecutive-timeouts 120 \
-  "venv/bin/python gpu_training.py"
+  "python gpu_training.py"
 
-# Non-interactive job with custom monitoring timeouts
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 \
-  --max-wait-time 1800 \
-  --connection-timeout 20 \
-  "venv/bin/python batch_processing.py"
+# Job with specific node-GPU assignment
+python src/mgpu_client.py submit --gpus 2 --node-gpu-ids "worker01:0,1" "python script.py"
 
-# Real tested example: PyTorch CUDA test
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
+# Cross-node distributed job
+python src/mgpu_client.py submit --gpus 4 --node-gpu-ids "worker01:0,1;worker02:0,1" "python multi_node_training.py"
 ```
 
 ### Queue Management
 
 ```bash
-# View all jobs and node status
-venv/bin/python src/mgpu_simple_client.py queue
+# View all jobs and cluster status
+python src/mgpu_client.py queue
 
-# Cancel a specific job
-venv/bin/python src/mgpu_simple_client.py cancel <job_id>
+# Monitor specific job output (unlimited time if no --max-wait-time specified)
+python src/mgpu_client.py monitor <job_id>
+
+# Monitor with custom timeout
+python src/mgpu_client.py monitor <job_id> --max-wait-time 1800
+
+# Cancel a job (with complete process tree cleanup)
+python src/mgpu_client.py cancel <job_id>
+
+# View queue status from remote machine
+python src/mgpu_client.py --host <MASTER_IP> --port 8080 queue
 ```
 
-### Advanced: Multi-node Jobs
+### Advanced Usage Examples
 
-**다른 노드의 GPU에 job 요청하는 방법:**
-
-#### 1. 자동 스케줄링 (추천)
-마스터 서버가 자동으로 사용 가능한 GPU에 할당:
+**1. Automatic Job Scheduling (Recommended)**
 ```bash
-# 단일 GPU job - 자동으로 가장 사용 가능한 노드에 할당
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 "venv/bin/python script.py"
+# Single GPU job - automatically assigned to best available node
+python src/mgpu_client.py submit --gpus 1 "python script.py"
 
-# 다중 GPU job - 여러 노드에 자동 분산
-venv/bin/python src/mgpu_simple_client.py submit --gpus 4 "venv/bin/python distributed_training.py"
+# Multi-GPU job - automatically distributed across available nodes
+python src/mgpu_client.py submit --gpus 4 "python distributed_training.py"
 
-# 인터랙티브 모드로 다른 노드에서 실행
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
+# Interactive mode with automatic assignment
+python src/mgpu_client.py submit --gpus 1 --interactive "python debug_script.py"
 ```
 
-#### 2. 특정 노드/GPU 지정 (고급 사용자)
+**2. Specific Node/GPU Assignment (Advanced Users)**
 ```bash
-# 특정 노드의 특정 GPU에 job 제출
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --node-gpu-ids "node001:0" "venv/bin/python script.py"
+# Specific node and GPU assignment
+python src/mgpu_client.py submit --gpus 1 --node-gpu-ids "worker01:0" "python script.py"
 
-# 특정 노드의 여러 GPU 사용
-venv/bin/python src/mgpu_simple_client.py submit --gpus 2 --node-gpu-ids "node001:0,1" "venv/bin/python multi_gpu_script.py"
+# Multiple GPUs on specific node
+python src/mgpu_client.py submit --gpus 2 --node-gpu-ids "worker01:0,1" "python multi_gpu_script.py"
 
-# 여러 노드에 걸친 분산 job
-venv/bin/python src/mgpu_simple_client.py submit --gpus 4 --node-gpu-ids "node001:0,1;node002:0,1" "venv/bin/python distributed_training.py"
+# Distributed job across multiple nodes
+python src/mgpu_client.py submit --gpus 4 --node-gpu-ids "worker01:0,1;worker02:0,1" "python distributed_training.py"
 
-# 특정 노드에서 인터랙티브 실행
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive --node-gpu-ids "node002:0" "venv/bin/python debug_script.py"
+# Interactive execution on specific node
+python src/mgpu_client.py submit --gpus 1 --interactive --node-gpu-ids "worker02:0" "python debug_script.py"
 ```
 
-#### 3. 실제 멀티노드 설정 예시
-
-**마스터 노드 (192.168.1.100):**
+**3. Timeout Management**
 ```bash
-# 마스터 서버 시작 - 모든 네트워크 인터페이스에서 수신
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
-```
+# Unlimited execution time (default behavior)
+python src/mgpu_client.py submit --gpus 1 "python long_running_job.py"
 
-**워커 노드들:**
-```bash
-# 노드 1 (192.168.1.101)
-venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node001
+# With session timeout only
+python src/mgpu_client.py submit --gpus 1 --session-timeout 7200 "python training.py"
 
-# 노드 2 (192.168.1.102) 
-venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node002
-
-# 노드 3 (192.168.1.103)
-venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node003
-```
-
-**클라이언트에서 job 제출:**
-```bash
-# 어느 머신에서든 마스터 서버에 연결하여 job 제출 가능
-venv/bin/python src/mgpu_simple_client.py --host 192.168.1.100 --port 8080 submit --gpus 2 "venv/bin/python distributed_script.py"
-
-# 특정 노드 지정
-venv/bin/python src/mgpu_simple_client.py --host 192.168.1.100 --port 8080 submit --gpus 1 --node-gpu-ids "node002:0" "venv/bin/python script.py"
-```
-
-#### 4. 노드 상태 확인
-```bash
-# 모든 노드와 GPU 상태 확인
-venv/bin/python src/mgpu_simple_client.py --host 192.168.1.100 --port 8080 queue
-
-# 출력 예시:
-# Jobs:
-#   F68FAFEC: running on node002:gpu0
-#   A23B4C5D: queued (waiting for 2 GPUs)
-# 
-# Nodes:
-#   node001: 2 GPUs (1 free, 1 busy)
-#   node002: 1 GPU (0 free, 1 busy) 
-#   node003: 4 GPUs (4 free, 0 busy)
+# With all timeout options
+python src/mgpu_client.py submit --gpus 1 --interactive \
+  --session-timeout 3600 \
+  --connection-timeout 30 \
+  --max-wait-time 600 \
+  --max-consecutive-timeouts 60 \
+  "python monitored_job.py"
 ```
 
 ## Command Reference
 
-### mgpu_simple_client.py (Current Working Client)
+### mgpu_client.py - Job Management Client
 
 **submit** - Submit a new job
 ```bash
-submit [--gpus N] [--interactive] [--node-gpu-ids "node:gpu_list"] \
-       [--session-timeout SECONDS] [--connection-timeout SECONDS] \
-       [--max-wait-time SECONDS] [--max-consecutive-timeouts COUNT] \
-       "command"
+python src/mgpu_client.py submit [OPTIONS] "command"
+
+Options:
+  --gpus N                          Number of GPUs required (default: 1)
+  --interactive                     Enable interactive mode with real-time output
+  --node-gpu-ids "node:gpu_list"    Specific node-GPU mapping (e.g., "node1:0,1;node2:2")
+  --session-timeout SECONDS         Maximum session duration (unlimited if not specified)
+  --connection-timeout SECONDS      Socket connection timeout (unlimited if not specified)  
+  --max-wait-time SECONDS           Maximum wait time for job output (unlimited if not specified)
+  --max-consecutive-timeouts COUNT  Maximum consecutive timeouts (unlimited if not specified)
 ```
 
-**Timeout Options:**
-- `--session-timeout`: Maximum session duration in seconds (default: 7200 = 2 hours)
-- `--connection-timeout`: Socket connection timeout in seconds (default: 30)
-- `--max-wait-time`: Maximum wait time for job output in seconds (default: 300 = 5 minutes)
-- `--max-consecutive-timeouts`: Maximum consecutive timeouts before giving up (default: 30)
-
-**queue** - Show queue status
+**queue** - Show cluster and job status
 ```bash
-queue
+python src/mgpu_client.py queue
 ```
 
-**cancel** - Cancel a job
+**cancel** - Cancel a job with complete process cleanup
 ```bash
-cancel <job_id>
+python src/mgpu_client.py cancel <job_id>
 ```
 
-### mgpu_simple_master.py (Current Working Server)
+**monitor** - Monitor job output
+```bash
+python src/mgpu_client.py monitor <job_id> [--max-wait-time SECONDS]
+```
+
+**Global Options:**
+```bash
+--host HOST        Master server hostname/IP (default: 127.0.0.1)
+--port PORT        Master server port (default: 8080)
+--verbose          Enable detailed logging
+```
+
+### mgpu_master.py - Master Server
 
 **Start the master server:**
 ```bash
-venv/bin/python src/mgpu_simple_master.py [--host HOST] [--port PORT]
+python src/mgpu_master.py [OPTIONS]
 
-# Example: Bind to all interfaces on port 8080
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+Options:
+  --host HOST        Bind address (default: 127.0.0.1, use 0.0.0.0 for all interfaces)
+  --port PORT        Listen port (default: 8080)
+  --verbose          Enable detailed logging
 ```
 
-### mgpu_simple_node.py (For Multi-node Setup)
+### mgpu_node.py - Node Agent
 
 **Start a node agent:**
 ```bash
-venv/bin/python src/mgpu_simple_node.py --master-host HOST --master-port PORT --node-id NODE_NAME
+python src/mgpu_node.py [OPTIONS]
 
-# Example: Connect to local master
-venv/bin/python src/mgpu_simple_node.py --master-host 127.0.0.1 --master-port 8080 --node-id node001
+Options:
+  --master-host HOST    Master server hostname/IP (required)
+  --master-port PORT    Master server port (default: 8080)
+  --node-id NODE_ID     Unique node identifier (required)
+  --verbose             Enable detailed logging
+```
+
+### mgpu_queue.py - Queue Management
+
+**Queue operations:**
+```bash
+python src/mgpu_queue.py [OPTIONS]
+
+Options:
+  --host HOST        Master server hostname/IP (default: 127.0.0.1)
+  --port PORT        Master server port (default: 8080)
+```
+
+### mgpu_cancel.py - Job Cancellation
+
+**Cancel jobs:**
+```bash
+python src/mgpu_cancel.py [OPTIONS] <job_id>
+
+Options:
+  --host HOST        Master server hostname/IP (default: 127.0.0.1)
+  --port PORT        Master server port (default: 8080)
 ```
 
 ## Development
 
 ### Architecture Principles
 
-1. **Simplicity First**: Keep code simple and readable
-2. **Reliability**: Prefer stable, proven approaches
-3. **Maintainability**: Easy to debug and extend
-4. **Testability**: Clear interfaces for testing
+1. **Single Responsibility Principle**: Each class has one clear, well-defined responsibility
+2. **Modular Design**: Clear separation between core, server, client, and node components
+3. **Reliability**: Robust error handling with graceful degradation
+4. **Maintainability**: Clean, readable code with comprehensive logging
+5. **Testability**: Clear interfaces and dependency injection for testing
 
 ### Code Structure
 
-**Currently working implementations:**
+**Core Components:**
 ```
 src/
-├── mgpu_simple_master.py      # ✅ Working master server
-├── mgpu_simple_client.py      # ✅ Working client interface  
-├── mgpu_simple_node.py        # ✅ Working node agent
-├── mgpu_master_server.py      # 🚧 Under development (simplified)
-├── mgpu_srun_multinode.py     # 🚧 Under development (enhanced client)
-└── mgpu_*.py                  # 📚 Legacy complex implementations
+├── mgpu_core/                 # ✅ Shared foundation components
+│   ├── models/               # Data models and message types
+│   ├── network/              # Network communication utilities
+│   └── utils/                # System utilities and helpers
+├── mgpu_server/              # ✅ Master server components  
+│   ├── job_scheduler.py      # Job queue and scheduling logic
+│   ├── node_manager.py       # Node registration and health monitoring
+│   └── master_server.py      # Client request handling
+├── mgpu_client/              # ✅ Client interface components
+│   └── job_client.py         # Job submission and monitoring
+├── mgpu_node/                # ✅ Worker node components
+│   └── node_agent.py         # Job execution and process management
+└── Entry Points:             # ✅ Command-line interfaces
+    ├── mgpu_master.py        # Master server entry point
+    ├── mgpu_client.py        # Client interface entry point
+    ├── mgpu_node.py          # Node agent entry point
+    ├── mgpu_queue.py         # Queue management entry point
+    └── mgpu_cancel.py        # Job cancellation entry point
 ```
 
-**Recommended for new users:** Start with `mgpu_simple_*` files - they are stable and fully functional.
+### Building and Packaging
+
+**Create standalone executables:**
+```bash
+# Build all components
+./build.sh
+
+# Build specific components
+python -m PyInstaller mgpu_master.spec
+python -m PyInstaller mgpu_client.spec  
+python -m PyInstaller mgpu_node.spec
+```
+
+**Built executables will be available in:**
+```
+build/mgpu_master/mgpu_master
+build/mgpu_client/mgpu_client
+build/mgpu_node/mgpu_node
+```
 
 ### Testing
 
 ```bash
-# Basic functionality test with virtual environment
-venv/bin/python test/test_torch_load.py
+# Run comprehensive test suite
+python test/run_tests.py
 
-# Test through the scheduler (recommended)
-# 1. Start master and node first, then:
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
+# Test individual components
+python test/test_torch_load.py
+python test/test_gpu_functionality.py
+python test/test_integration.py
 
-# Run test suite
-venv/bin/python test/run_tests.py
+# Test through the scheduler (recommended integration test)
+# 1. Start master and node agents first, then:
+python src/mgpu_client.py submit --gpus 1 --interactive "python test/test_torch_load.py"
 ```
 
-### Quick Test Procedure
+### Testing Checklist
 
-**Verified working setup:**
+**Basic Functionality:**
+1. ✅ Master server starts and binds correctly
+2. ✅ Node agents connect and register with master
+3. ✅ Jobs submit successfully and execute on appropriate nodes
+4. ✅ Interactive and non-interactive modes work correctly
+5. ✅ Job cancellation properly cleans up processes
+6. ✅ Queue status shows accurate information
+7. ✅ Multi-node job distribution works correctly
 
-1. **Start the system:**
-```bash
-# Terminal 1
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+**Process Management:**
+1. ✅ Jobs run in separate process groups
+2. ✅ Process tree cleanup on cancellation
+3. ✅ No orphaned or zombie processes
+4. ✅ Graceful termination with SIGTERM/SIGKILL progression
 
-# Terminal 2  
-venv/bin/python src/mgpu_simple_node.py --node-id node001 --master-host 127.0.0.1 --master-port 8080
-```
-
-2. **Test PyTorch functionality:**
-```bash
-# Terminal 3
-venv/bin/python src/mgpu_simple_client.py submit --gpus 1 --interactive "venv/bin/python test/test_torch_load.py"
-```
-
-3. **Verify output includes:**
-   - PyTorch version and CUDA availability
-   - GPU device information
-   - Successful completion of all test phases
+**Network and Timeout:**
+1. ✅ Unlimited execution time when no timeouts specified
+2. ✅ Custom timeout settings work correctly
+3. ✅ Network reconnection and error handling
+4. ✅ Multi-node communication and fault tolerance
 
 ## Troubleshooting
 
-### Node 연결 문제 진단
+### Multi-node Connection Diagnostics
 
-**다른 노드에서 연결이 안될 때 단계별 확인 방법:**
+**Step-by-step troubleshooting for node connection issues:**
 
-#### 1. 마스터 서버 상태 확인 (마스터 노드에서)
+#### 1. Master Server Status Check (on master node)
 ```bash
-# 마스터 서버 프로세스 확인
-ps aux | grep mgpu_simple_master
+# Check master server process
+ps aux | grep mgpu_master
 
-# 포트 바인딩 확인 - 0.0.0.0:8080 으로 바인딩되어야 함
+# Check port binding - should bind to 0.0.0.0:8080 for external connections
 netstat -tlnp | grep 8080
-# 또는
+# or
 ss -tlnp | grep 8080
 
-# 기대하는 출력: tcp 0 0 0.0.0.0:8080 0.0.0.0:* LISTEN
-# 만약 127.0.0.1:8080 으로만 바인딩되어 있다면 외부 연결 불가
+# Expected output: tcp 0 0 0.0.0.0:8080 0.0.0.0:* LISTEN
+# If only 127.0.0.1:8080, external connections will fail
 ```
 
-#### 2. 네트워크 연결 테스트 (워커 노드에서)
+#### 2. Network Connectivity Test (from worker nodes)
 ```bash
-# 마스터 노드 ping 테스트
+# Test master node reachability
 ping -c 3 192.168.1.100
 
-# 포트 연결 테스트
+# Test port connectivity
 telnet 192.168.1.100 8080
-# 또는
+# or
 nc -v 192.168.1.100 8080
 
-# 성공시: Connected to 192.168.1.100
-# 실패시: Connection refused / Connection timed out
+# Success: "Connected to 192.168.1.100"
+# Failure: "Connection refused" / "Connection timed out"
 ```
 
-#### 3. 방화벽 확인
-**마스터 노드에서:**
+#### 3. Firewall Configuration
+**On master node:**
 ```bash
 # Ubuntu/Debian
 sudo ufw status
 sudo ufw allow 8080
 
-# CentOS/RHEL/Rocky
+# CentOS/RHEL/Rocky Linux
 sudo firewall-cmd --list-all
 sudo firewall-cmd --permanent --add-port=8080/tcp
 sudo firewall-cmd --reload
 
-# 방화벽 완전 비활성화 (테스트용)
+# Temporary disable for testing (be careful!)
 sudo ufw disable  # Ubuntu
 sudo systemctl stop firewalld  # CentOS
 ```
 
-#### 4. 마스터 서버 재시작 (올바른 바인딩으로)
+#### 4. Restart Master Server with Correct Binding
 ```bash
-# 잘못된 시작 (외부 연결 불가)
-venv/bin/python src/mgpu_simple_master.py --host 127.0.0.1 --port 8080
+# Incorrect (only local connections)
+python src/mgpu_master.py --host 127.0.0.1 --port 8080
 
-# 올바른 시작 (모든 인터페이스에서 수신)
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+# Correct (all network interfaces)
+python src/mgpu_master.py --host 0.0.0.0 --port 8080
 ```
 
-#### 5. 노드 에이전트 연결 테스트
-**워커 노드에서:**
+#### 5. Node Agent Connection Test
+**On worker nodes:**
 ```bash
-# 상세한 오류 메시지와 함께 노드 에이전트 시작
-venv/bin/python src/mgpu_simple_node.py \
+# Start node agent with verbose logging
+python src/mgpu_node.py \
   --master-host 192.168.1.100 \
   --master-port 8080 \
-  --node-id node001 \
+  --node-id worker01 \
   --verbose
 
-# 연결 성공시: "Connected to master server"
-# 연결 실패시: "Connection refused" 또는 "Connection timeout"
+# Success: "Node registration successful"
+# Failure: "Connection refused" or "Connection timeout"
 ```
 
-#### 6. 네트워크 경로 및 라우팅 확인
+#### 6. Network Routing and Path Verification
 ```bash
-# 라우팅 테이블 확인
+# Check routing table
 ip route
 
-# 특정 IP로의 경로 추적
+# Trace route to master
 traceroute 192.168.1.100
 
-# 네트워크 인터페이스 확인
+# Check network interfaces
 ip addr show
+
+# Test with different master IP/hostname
+python src/mgpu_node.py --master-host master.example.com --master-port 8080 --node-id worker01
 ```
 
-#### 7. 포트 스캔으로 서비스 확인
+#### 7. Port Scanning for Service Verification
 ```bash
-# nmap으로 마스터 노드 포트 확인
+# Scan master node ports
 nmap -p 8080 192.168.1.100
 
-# 출력 예시:
-# 8080/tcp open  http-proxy  (연결 가능)
-# 8080/tcp filtered http-proxy  (방화벽 차단)
-# 8080/tcp closed http-proxy  (서비스 미실행)
+# Expected outputs:
+# 8080/tcp open  http-proxy  (service running and accessible)
+# 8080/tcp filtered http-proxy  (firewall blocking)
+# 8080/tcp closed http-proxy  (service not running)
 ```
 
-#### 8. 로그 및 오류 메시지 확인
+#### 8. Log Analysis and Error Messages
 ```bash
-# 마스터 서버 로그 (터미널에서 확인)
-# 노드 연결시 보이는 상세 메시지:
-# 🔗 Node node001 connected from 192.168.1.101:8081
-#    └─ 🎮 2 GPU(s) detected:
-#       ├─ GPU 0: NVIDIA GeForce RTX 3060 (12288 MB)
-#       ├─ GPU 1: NVIDIA GeForce RTX 4090 (24576 MB)
+# Master server logs (in terminal output):
+# Success: "Node worker01 connected from 192.168.1.101"
+# Success: "GPU detection: 2 GPU(s) found on worker01"
 
-# 노드 에이전트 로그 (각 워커 노드에서)
-# ✅ Registration successful
-# Simple Node Agent node001 started on 0.0.0.0:8081
+# Node agent logs (in terminal output):
+# Success: "Connected to master server at 192.168.1.100:8080"
+# Success: "Node registration successful"
 
-# 노드 에이전트 오류 메시지 확인
-# - "Connection refused": 마스터 서버 미실행 또는 포트 문제
-# - "No route to host": 네트워크 연결 문제
-# - "Connection timed out": 방화벽 또는 네트워크 지연
-# - "Registration failed": 마스터 서버 연결은 되지만 등록 실패
+# Common error messages:
+# "Connection refused": Master server not running or wrong port
+# "No route to host": Network connectivity issues  
+# "Connection timed out": Firewall blocking or network delays
+# "Registration failed": Connected but master rejected registration
 ```
 
-#### 9. 단계별 문제 해결
+#### 9. Complete Multi-node Setup Verification
 ```bash
-# Step 1: 마스터 서버 올바른 시작
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080
+# Step 1: Start master server (bind to all interfaces)
+python src/mgpu_master.py --host 0.0.0.0 --port 8080
 
-# Step 2: 방화벽 설정 (마스터 노드)
+# Step 2: Configure firewall (on master node)
 sudo ufw allow 8080
 
-# Step 3: 연결 테스트 (워커 노드)
+# Step 3: Test connectivity (from worker node)
 telnet 192.168.1.100 8080
 
-# Step 4: 노드 에이전트 시작 (워커 노드)
-venv/bin/python src/mgpu_simple_node.py --master-host 192.168.1.100 --master-port 8080 --node-id node001
+# Step 4: Start node agent (on worker node)
+python src/mgpu_node.py --master-host 192.168.1.100 --master-port 8080 --node-id worker01
 
-# Step 5: 연결 확인 (어느 노드에서든)
-venv/bin/python src/mgpu_simple_client.py --host 192.168.1.100 --port 8080 queue
+# Step 5: Verify cluster status (from any machine)
+python src/mgpu_client.py --host 192.168.1.100 --port 8080 queue
 ```
 
-#### 10. 일반적인 오류 메시지와 해결책
+#### 10. Common Error Messages and Solutions
 ```bash
 # "Connection refused"
-→ 마스터 서버가 실행되지 않았거나 잘못된 바인딩
-→ 해결: --host 0.0.0.0 으로 마스터 서버 재시작
+→ Master server not running or incorrect binding
+→ Solution: Restart master with --host 0.0.0.0
 
-# "No route to host"
-→ 네트워크 설정 문제 또는 IP 주소 오류
-→ 해결: ping 테스트 및 네트워크 설정 확인
+# "No route to host"  
+→ Network configuration issues or wrong IP address
+→ Solution: Check ping connectivity and network settings
 
 # "Connection timed out"
-→ 방화벽이 포트를 차단하고 있음
-→ 해결: 방화벽에서 8080 포트 허용
+→ Firewall blocking the port
+→ Solution: Allow port 8080 in firewall rules
 
 # "Name or service not known"
-→ 호스트명 해석 실패
-→ 해결: IP 주소 직접 사용 또는 /etc/hosts 설정
+→ DNS hostname resolution failure
+→ Solution: Use IP address directly or configure /etc/hosts
+
+# "Registration failed"
+→ Master server rejects node registration
+→ Solution: Check master server logs for specific error details
 ```
 
-### 기타 일반적인 문제들
+### Common Issues and Solutions
 
 1. **Server won't start**
    - Check if port 8080 is available: `netstat -tlnp | grep 8080`
    - Verify Python environment: `which python`
-   - Check dependencies: `pip list | grep -i yaml`
+   - Check dependencies: `pip list | grep -E "(yaml|psutil)"`
 
-2. **Jobs not running**
+2. **Jobs not executing**
    - Verify GPU availability: `nvidia-smi`
    - Check CUDA installation: `nvcc --version`
-   - Check node registration: `venv/bin/python src/mgpu_simple_client.py queue`
+   - Check node registration: `python src/mgpu_client.py queue`
+   - Review node agent logs for errors
 
-3. **Virtual environment issues**
-   - Ensure same venv path on all nodes
-   - Check PyTorch installation consistency
-   - Verify CUDA libraries availability
+3. **Process cleanup issues**
+   - Verify psutil installation: `pip install psutil`
+   - Check system permissions for process signals
+   - Review job cancellation logs for cleanup details
+
+4. **Environment compatibility**
+   - Ensure consistent Python versions across nodes
+   - Verify required packages on all nodes: `pip list`
+   - Check CUDA driver compatibility on GPU nodes
 
 ### Debug Mode
 
-Enable detailed logging:
+Enable detailed logging for troubleshooting:
 ```bash
-# For current working implementation
-venv/bin/python src/mgpu_simple_master.py --host 0.0.0.0 --port 8080 --verbose
+# Master server with verbose output
+python src/mgpu_master.py --host 0.0.0.0 --port 8080 --verbose
 
-# Add verbose output to node agent
-venv/bin/python src/mgpu_simple_node.py --master-host IP --master-port 8080 --node-id nodeXXX --verbose
+# Node agent with verbose output  
+python src/mgpu_node.py --master-host IP --master-port 8080 --node-id nodeXXX --verbose
+
+# Client with verbose output
+python src/mgpu_client.py --verbose submit --gpus 1 "python script.py"
 ```
 
 ## Migration Guide
 
-### From Complex v1.0 System
+### From Legacy v1.0 System
 
-If you're migrating from the previous complex system:
+If you're migrating from a previous version:
 
-1. **Backup your current setup**
-2. **Update configuration** to the new simplified YAML format
-3. **Test with simple jobs** before production use
-4. **Review and simplify** your job submission scripts
+1. **Update entry points**: Use new modular entry points (`mgpu_master.py`, `mgpu_client.py`, `mgpu_node.py`)
+2. **Review timeout behavior**: New system supports unlimited execution by default
+3. **Update job scripts**: No changes needed for job scripts themselves
+4. **Test with simple jobs**: Verify functionality before production use
 
 ### Configuration Changes
 
-- Simplified YAML structure
-- Removed complex scheduling options
-- Focus on core functionality
+- **Simplified command structure**: Cleaner argument parsing
+- **Modular architecture**: Components are now clearly separated
+- **Enhanced process management**: Improved job cleanup and termination
+- **Flexible timeout handling**: Support for unlimited execution time
 
 ## Contributing
 
-1. Follow the simplicity principle
-2. Write clear, readable code
-3. Add tests for new features
-4. Update documentation
+### Development Guidelines
+
+1. **Follow Single Responsibility Principle**: Each class should have one clear purpose
+2. **Maintain modular structure**: Keep core, server, client, and node components separate
+3. **Write comprehensive tests**: Add tests for new features and bug fixes
+4. **Update documentation**: Keep README and code comments current
+5. **Use consistent coding style**: Follow existing patterns and conventions
+
+### Code Review Process
+
+1. **Test thoroughly**: Verify single-node and multi-node functionality
+2. **Check process management**: Ensure proper cleanup of job processes
+3. **Validate timeout handling**: Test unlimited and limited timeout scenarios
+4. **Review error handling**: Ensure graceful failure recovery
+5. **Update tests**: Add or modify tests as needed
 
 ## Version History
 
-### v2.0.0 - Simplified Architecture
-- Complete rewrite focusing on simplicity and reliability
-- Removed complex features that caused stability issues
-- Clean, maintainable codebase
-- Improved error handling and recovery
+### v2.0.0 - Modular Architecture
+- **Complete modular rewrite** following Single Responsibility Principle
+- **Enhanced process management** with proper process tree cleanup
+- **Flexible timeout handling** with unlimited execution support
+- **Improved error handling** and logging throughout the system
+- **Clean separation** of core, server, client, and node components
+- **Robust multi-node support** with automatic load balancing
 
-### v1.0.0 - Complex System (Legacy)
-- Feature-rich but complex architecture
-- Multiple threading and streaming features
-- Known stability and maintenance issues
+### v1.0.0 - Legacy System
+- Initial implementation with basic GPU scheduling
+- Simple architecture suitable for small-scale deployments
+- Limited process management and error handling
 
 ## License
 
@@ -741,12 +784,33 @@ If you're migrating from the previous complex system:
 
 ## Support
 
-For issues:
-1. Check this README and troubleshooting section
-2. Review system logs for errors
-3. Test with the simple reference implementations
-4. Report issues with clear reproduction steps
+For issues and support:
+
+1. **Check troubleshooting section** in this README
+2. **Review system logs** for detailed error messages
+3. **Test with verbose logging** enabled for debugging
+4. **Verify network connectivity** for multi-node setups
+5. **Check process management** for job cleanup issues
+
+### Reporting Issues
+
+When reporting issues, please include:
+
+- **System configuration**: OS, Python version, GPU setup
+- **Network setup**: Single-node vs multi-node configuration
+- **Error messages**: Complete error logs with timestamps
+- **Reproduction steps**: Clear steps to reproduce the issue
+- **Expected vs actual behavior**: What should happen vs what actually happens
+
+### Getting Help
+
+For questions and assistance:
+
+- **Documentation**: Review this README thoroughly
+- **Test cases**: Check the test directory for examples
+- **Verbose logging**: Enable detailed logging for troubleshooting
+- **Community**: Engage with other users for tips and best practices
 
 ---
 
-**Note**: This simplified version prioritizes stability and maintainability. If you need advanced features, consider implementing them incrementally on top of this solid foundation.
+**Note**: This modular v2.0 system provides a solid, maintainable foundation for GPU resource management. The architecture supports both simple single-node setups and complex multi-node clusters while maintaining clean, readable code that's easy to debug and extend.
