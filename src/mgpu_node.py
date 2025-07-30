@@ -29,7 +29,7 @@ class JobProcess:
         self.start_time = time.time()
         self.interactive_clients = []  # List of client sockets for interactive output
 
-class SimpleNode:
+class Node:
     """Simplified Node Agent"""
     
     def __init__(self, node_id: str, host='0.0.0.0', port=8081, master_host='127.0.0.1', master_port=8080, gpu_count=1):
@@ -668,7 +668,7 @@ class SimpleNode:
         server_socket.bind((self.host, self.port))
         server_socket.listen(5)
         
-        logger.info(f"Simple Node Agent {self.node_id} started on {self.host}:{self.port}")
+        logger.info(f"Node Agent {self.node_id} started on {self.host}:{self.port}")
         logger.info(f"Master server: {self.master_host}:{self.master_port}")
         logger.info(f"Available GPUs: {self.available_gpus}")
         
@@ -702,17 +702,17 @@ class SimpleNode:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='Simple Node Agent')
+    parser = argparse.ArgumentParser(description='Node Agent')
     parser.add_argument('--node-id', required=True, help='Node ID')
-    parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
+    parser.add_argument('--host', required=True, help='Host to bind to')
     parser.add_argument('--port', type=int, default=8081, help='Port to bind to')
-    parser.add_argument('--master-host', default='127.0.0.1', help='Master server host')
+    parser.add_argument('--master-host', required=True, help='Master server host')
     parser.add_argument('--master-port', type=int, default=8080, help='Master server port')
     parser.add_argument('--gpu-count', type=int, default=1, help='Number of GPUs on this node')
     
     args = parser.parse_args()
     
-    node = SimpleNode(
+    node = Node(
         args.node_id,
         args.host,
         args.port,

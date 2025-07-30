@@ -20,22 +20,39 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 @dataclass
-class SimpleJob:
-    """Simplified job representation"""
-    id: str
-    user: str
-    cmd: str
-    gpus_needed: int
-    node_gpu_ids: Optional[Dict[str, List[int]]] = None
-    priority: int = 0
-    status: str = "queued"  # queued, running, completed, failed
-    interactive: bool = False
-    start_time: Optional[float] = None
-    end_time: Optional[float] = None
-    exit_code: Optional[int] = None
-    assigned_node: Optional[str] = None
-    assigned_gpus: Optional[List[int]] = None
-    retry_count: int = 0  # Track retry attempts
+class Job:
+    def __init__(
+        self,
+        id: str,
+        user: str,
+        cmd: str,
+        gpus_needed: int,
+        node_gpu_ids: Optional[Dict[str, List[int]]] = None,
+        priority: int = 0,
+        status: str = "queued",
+        interactive: bool = False,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        exit_code: Optional[int] = None,
+        assigned_node: Optional[str] = None,
+        assigned_gpus: Optional[List[int]] = None,
+        retry_count: int = 0
+    ):
+        """Simplified job representation"""
+        self.id = id
+        self.user = user
+        self.cmd = cmd
+        self.gpus_needed = gpus_needed
+        self.node_gpu_ids = node_gpu_ids
+        self.priority = priority
+        self.status = status
+        self.interactive = interactive
+        self.start_time = start_time
+        self.end_time = end_time
+        self.exit_code = exit_code
+        self.assigned_node = assigned_node
+        self.assigned_gpus = assigned_gpus
+        self.retry_count = retry_count
 
     def to_dict(self):
         """Convert to dictionary for JSON serialization"""
@@ -67,16 +84,15 @@ class NodeInfo:
         self.running_jobs = []
         self.last_heartbeat = time.time()
 
-class SimpleMaster:
-    """Simplified Master Server"""
-    
+class Master:
     def __init__(self, host='0.0.0.0', port=8080):
+        """Simplified Master Server"""
         self.host = host
         self.port = port
         self.nodes = {}  # node_id -> NodeInfo
         self.job_queue = queue.Queue()
-        self.running_jobs = {}  # job_id -> SimpleJob
-        self.completed_jobs = {}  # job_id -> SimpleJob
+        self.running_jobs = {}  # job_id -> Job
+        self.completed_jobs = {}  # job_id -> Job
         self.job_outputs = {}  # job_id -> List[str] - store output for non-interactive jobs
         self.interactive_clients = {}  # job_id -> List[socket] - interactive client connections
         self.lock = threading.RLock()
@@ -96,7 +112,7 @@ class SimpleMaster:
             logger.info(f"Received submit request: {request}")
             
             # Create job
-            job = SimpleJob(
+            job = Job(
                 id=request.get('job_id', str(uuid.uuid4())[:8].upper()),
                 user=request.get('user', 'unknown'),
                 cmd=request.get('command', ''),  # Use command field from new client
@@ -303,7 +319,7 @@ class SimpleMaster:
             
             return None
     
-    def find_available_node(self, job: SimpleJob) -> Optional[str]:
+    def find_available_node(self, job: Job) -> Optional[str]:
         """Find available node for job"""
         with self.lock:
             logger.info(f"Finding node for job {job.id}, node_gpu_ids: {job.node_gpu_ids}")
@@ -392,7 +408,7 @@ echo "=============================="
             'last_heartbeat_iso': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_heartbeat))
         }
     
-    def diagnose_scheduling_issue(self, job: SimpleJob) -> Dict[str, Any]:
+    def diagnose_scheduling_issue(self, job: Job) -> Dict[str, Any]:
         """Diagnose why a job cannot be scheduled"""
         diagnosis = {
             'job_id': job.id,
@@ -919,7 +935,7 @@ echo "=============================="
         server_socket.bind((self.host, self.port))
         server_socket.listen(10)
         
-        logger.info(f"Simple Master Server started on {self.host}:{self.port}")
+        logger.info(f"Master Server started on {self.host}:{self.port}")
         
         try:
             while self.running:
@@ -939,17 +955,14 @@ echo "=============================="
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='Simple Master Server')
+    parser = argparse.ArgumentParser(description='Master Server')
     parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
     parser.add_argument('--port', type=int, default=8080, help='Port to bind to')
     parser.add_argument('--config', help='Cluster configuration file')
     
     args = parser.parse_args()
     
-    master = SimpleMaster(args.host, args.port)
-    
-    # Add default node for testing
-    master.add_node('node001', '127.0.0.1', 8081, 1)
+    master = Master(args.host, args.port)
     
     # Load config if provided
     if args.config:
